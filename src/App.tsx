@@ -382,6 +382,14 @@ export default function App() {
     setExportState(null);
   };
 
+  // Team mode scenes for the version on screen, shown as markers on the timeline.
+  const segments = useMemo(() => {
+    const turn = project.turns.find((t) => t.role === "assistant" && t.version === project.current);
+    return turn && turn.role === "assistant" && turn.team
+      ? turn.team.scenes.map((s) => ({ start: s.start, end: s.end, title: s.title }))
+      : [];
+  }, [project.turns, project.current]);
+
   // ---------- render ----------
   const [W, H] = dims(project.settings);
   const effectiveEffort: Effort = project.settings.cinematic ? "high" : effort;
@@ -430,7 +438,7 @@ export default function App() {
           overlay={overlay} onSlosh={onSlosh} runtimeError={runtimeError}
           onFix={() => runtimeError && generate({ prompt: "", error: runtimeError })} fixDisabled={generating}
           playing={playing} canPlay={canPlay} onTogglePlay={togglePlay}
-          onScrub={(t) => { pause(); bridge.seek(t); }} />
+          onScrub={(t) => { pause(); bridge.seek(t); }} segments={segments} />
         <CodePane hidden={tab !== "code"} source={liveCode ?? currentCode} currentCode={currentCode} status={codeStatus}
           streaming={generating && liveCode !== null} generating={generating} onRun={runEdits} />
       </main>

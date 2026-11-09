@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="320" height="320" viewBox="100 351 322 322" xml:space="preserve">
+<desc>Created with Fabric.js 5.3.0</desc>
+<defs>
+</defs>
+<g transform="matrix(1 0 0 1 640 512)" id="background-logo"  >
+<rect style="stroke: none; stroke-width: 0; stroke-dasharray: none; stroke-linecap: butt; stroke-dashoffset: 0; stroke-linejoin: miter; stroke-miterlimit: 4; fill: rgb(255,255,255); fill-opacity: 0; fill-rule: nonzero; opacity: 1;"  paint-order="stroke"  x="-640" y="-512" rx="0" ry="0" width="1280" height="1024" />
+</g>
+<g transform="matrix(1.3380760205651423 0 0 1.3380760205651423 260.8258307057969 511.63655105505717)" id="logo-logo"  >
+<g style=""  paint-order="stroke"   >
+		<g transform="matrix(1.8081665946738277 0 0 1.8081665946738277 0 0)"  >
+<path style="stroke: none; stroke-width: 1; stroke-dasharray: none; stroke-linecap: butt; stroke-dashoffset: 0; stroke-linejoin: miter; stroke-miterlimit: 4; fill: rgb(255,255,255); fill-rule: nonzero; opacity: 1;"  paint-order="stroke"  transform=" translate(-187.5, -150.00000004999998)" d="M 193.1050827 127.4894944 L 229.4503182 127.4894944 L 229.4503182 211.3901307 L 193.1050827 211.3901307 L 193.1050827 197.3502661 L 215.4104535 197.3502661 L 215.4104535 141.5293591 L 193.1050827 141.5293591 L 193.1050827 127.48949449999999 Z M 210.0105056 155.6050827 L 195.970641 155.6050827 L 195.970641 177.9104535 L 140.149734 177.9103217 L 140.149734 155.6049509 L 126.1098694 155.6049509 L 126.1098694 191.95005450000002 L 210.0105057 191.95031820000003 L 210.0105057 155.60508270000003 Z M 181.8949832 158.470641 L 159.58961240000002 158.4705092 L 159.5897442 102.64973400000001 L 181.895181 102.64973400000001 L 181.895181 88.60986940000001 L 145.5499455 88.60986940000001 L 145.5496818 172.51037380000002 L 181.8949832 172.51037380000002 L 181.8949832 158.47064100000003 Z M 164.9894944 108.0496819 L 164.9894944 144.3950492 L 179.029359 144.3949174 L 179.029359 122.0895466 L 234.850266 122.0895466 L 234.850266 144.3949174 L 248.8901306 144.3949174 L 248.8901306 108.0496819 L 164.9894943 108.0496819 Z" stroke-linecap="round" />
+</g>
+</g>
+</g>
+</svg>

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import type { Overlay } from "../types";
 import type { RuntimeBridge } from "../lib/runtime";
 import { createSlosh, type Slosh } from "../lib/slosh";
-import { fmtTime } from "../lib/constants";
-import { IconPause, IconPlay } from "./Icons";
+import { IconPlay } from "./Icons";
+import { Timeline, type Segment } from "./Timeline";
 
 interface Props {
   hidden: boolean;
@@ -21,6 +21,8 @@ interface Props {
   canPlay: boolean;
   onTogglePlay: () => void;
   onScrub: (t: number) => void;
+  /** Scene spans to mark on the timeline (Team mode). */
+  segments: Segment[];
 }
 
 export function Preview(props: Props) {
@@ -61,24 +63,8 @@ export function Preview(props: Props) {
           <button type="button" className="btn small" onClick={onFix} disabled={fixDisabled}>Fix with Claude</button>
         </div>
       )}
-      <Transport {...props} />
-    </div>
-  );
-}
-
-function Transport({ bridge, duration, fps, playing, canPlay, onTogglePlay, onScrub }: Props) {
-  const time = useSyncExternalStore(bridge.subscribe, bridge.getTime);
-  const pct = duration ? Math.min(100, (time / duration) * 100) : 0;
-  return (
-    <div className="transport">
-      <button type="button" className="play-btn" onClick={onTogglePlay} disabled={!canPlay} aria-label={playing ? "Pause" : "Play"}>
-        {playing ? <IconPause /> : <IconPlay />}
-      </button>
-      <span className="time">{fmtTime(time)}</span>
-      <input type="range" className="scrubber" min={0} max={duration} step={1 / fps} value={Math.min(time, duration)}
-        disabled={!canPlay} aria-label="Timeline" style={{ "--pct": `${pct}%` } as React.CSSProperties}
-        onChange={(e) => onScrub(Number(e.target.value))} />
-      <span className="time muted">{fmtTime(duration)}</span>
+      <Timeline bridge={bridge} duration={props.duration} fps={props.fps} playing={props.playing} canPlay={props.canPlay}
+        segments={props.segments} onTogglePlay={props.onTogglePlay} onScrub={props.onScrub} />
     </div>
   );
 }

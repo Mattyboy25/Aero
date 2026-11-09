@@ -22,3 +22,5 @@ export const IconChevron = (p: P) => <Base {...p}><path d="M6 9.5l6 6 6-6" /></B
 export const IconSparkle = (p: P) => <Base {...p}><path d="M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9-1.9 5.1-1.9-5.1L5 10.5l5.1-1.9z" /><path d="M18.5 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" /></Base>;
 export const IconAperture = (p: P) => <Base {...p}><circle cx="12" cy="12" r="8.5" /><path d="M12 3.5l4 7M20.4 10.5l-8 .2M16.3 19.4L12 12.5M7.7 19.4l4.2-7M3.6 13.5l8-.2M7.7 4.6l4.3 6.9" /></Base>;
 export const IconCopy = (p: P) => <Base {...p}><rect x="8.5" y="8.5" width="11" height="11" rx="2.5" /><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" /></Base>;
+export const IconStepBack = (p: P) => <Base {...p}><path d="M6.5 5v14" /><path d="M18 5.5v13L9 12z" fill="currentColor" stroke="none" /></Base>;
+export const IconStepForward = (p: P) => <Base {...p}><path d="M17.5 5v14" /><path d="M6 5.5v13L15 12z" fill="currentColor" stroke="none" /></Base>;
