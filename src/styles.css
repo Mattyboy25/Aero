@@ -168,6 +168,19 @@ button:disabled { cursor: default; }
 .app.sidebar-collapsed { grid-template-columns: var(--sidebar-rail) minmax(0, 1fr) var(--chat-w); }
 .app.resizing { transition: none; cursor: col-resize; user-select: none; }
 
+/* Fixed lengths on every column so the grid can animate between the two layouts. */
+.app { --side: var(--sidebar-w); grid-template-columns: var(--side) calc(100vw - var(--side) - var(--chat-w)) var(--chat-w); }
+.app.sidebar-collapsed { --side: var(--sidebar-rail); grid-template-columns: var(--side) calc(100vw - var(--side) - var(--chat-w)) var(--chat-w); }
+.workspace { overflow: hidden; transition: opacity .3s ease .1s; }
+
+/* New video: the chat fills the screen and the workspace is tucked away until the model starts coding. */
+.app.focus, .app.focus.sidebar-collapsed { grid-template-columns: var(--side) 0px calc(100vw - var(--side)); }
+.app.focus .workspace { opacity: 0; transition-delay: 0s; }
+.app.focus .chat-resizer { display: none; }
+.app.focus .chat { background: var(--bg); }
+.app.focus .messages, .app.focus .composer { width: min(720px, 100%); margin-inline: auto; box-sizing: border-box; }
+.app.focus .empty h1 { font-size: 30px; }
+
 /* Drag handle on the chat's left edge. Zero-width grid item so it doesn't take a column. */
 .chat-resizer {
   position: fixed; top: 0; bottom: 0; right: var(--chat-w); width: 10px; margin-right: -5px;
@@ -538,6 +551,8 @@ button:disabled { cursor: default; }
   .code-editor { min-height: 60vh; }
   .chat { min-height: 70vh; }
   .chat-resizer { display: none; }
+  .app.focus .workspace { display: none; }
+  .app.focus .chat { min-height: 100vh; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; }

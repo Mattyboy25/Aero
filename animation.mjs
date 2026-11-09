@@ -74,6 +74,21 @@ ${CAMERA}`,
 ${CAMERA}`,
   },
 
+  storytelling: {
+    label: "Storytelling",
+    direction: `Animation style: STORYTELLING.
+- Structure: the video is a story with a clear arc, not a list of effects. Open with a hook or a setup (who or what, and the situation), build through a problem, tension or change, and land on a resolution or payoff in the final beat. Give every beat one idea and make it obvious why it follows the last one.
+- Characters and subject: give the story a focal subject (a character, object, shape or number) that stays on screen across beats, changes as the story goes (position, size, color, expression, state), and carries the viewer's eye. Build simple characters from basic shapes with a face or gesture where it helps, and use motion to show feeling (slump, bounce, hesitate, lean in).
+- Pacing: let each beat breathe. Introduce, hold, then change. Use anticipation before big moments and a pause after them. Speed up for tension, slow down for emotion. Short beats of 1.5–4s, with the most important beat given the most time.
+- Easing: natural and motivated. Ease-out for arrivals, ease-in-out for travel, a small overshoot on moments of energy or surprise, and slow soft curves for quiet moments.
+- Text: sparse, like captions or chapter cards, not slides. Short sentences that appear when their moment arrives, one at a time, and leave before the next. Never more than one line group on screen at once, and never text that competes with the action.
+- Transitions: connect beats with continuity (the subject moves into the next scene, the camera follows, a shape morphs into the next object, a match cut on position or color). Avoid unrelated wipes.
+- Camera: motivated and cinematic. It follows the subject, pushes in on emotional moments, pulls back to reveal context or scale, and holds still on the payoff. Each move has a story reason.
+- Mood: a consistent palette that shifts with the story (cooler and darker for tension, warmer and brighter for resolution), with layered backgrounds that give a sense of place.
+
+${CAMERA}`,
+  },
+
   immersive: {
     label: "Immersive",
     direction: `Animation style: IMMERSIVE (3D depth).

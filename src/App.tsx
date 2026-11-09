@@ -28,6 +28,8 @@ const IDLE_TEXT = "Your video will appear here";
 /** Requests that mean "I want captions": these are routed to the narration track. */
 const CAPTION_REQUEST = /\b(caption(?:s|ed|ing)?|subtitl(?:e|es|ed|ing)|closed[- ]?captions?|voice[- ]?overs?|narrat(?:e|ed|ion|or|ing)|transcripts?)\b/i;
 const codeOf = (p: Project) => p.versions[p.current]?.code ?? "";
+// A version keeps the length it was made at. The Duration setting only applies to what is made next.
+const durationOf = (p: Project) => p.versions[p.current]?.duration ?? p.settings.duration;
 // Lane volumes as gains, with the timeline's lane mutes applied.
 const laneVolumes = (a: AudioPrefs) => ({
   narration: a.narrationMuted ? 0 : a.narrationVolume / 100,
@@ -73,6 +75,8 @@ export default function App() {
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [generating, setGenerating] = useState(false);
   const [liveCode, setLiveCode] = useState<string | null>(null);
+  // Set once the model starts writing code, which is when a new video's chat slides over to reveal the workspace.
+  const [codingStarted, setCodingStarted] = useState(false);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [exportState, setExportState] = useState<ExportState | null>(null);
@@ -89,6 +93,7 @@ export default function App() {
 
   const project = projects.find((p) => p.id === activeId) ?? projects[0];
   const currentCode = codeOf(project);
+  const videoDuration = durationOf(project);
   const [overlay, setOverlayState] = useState<Overlay>(() => {
     const p = initial.projects.find((x) => x.id === initial.activeId)!;
     return codeOf(p)
@@ -129,8 +134,8 @@ export default function App() {
     playingRef.current = autoplay;
     setPlaying(autoplay);
     bridge.load({
-      code, W, H, DURATION: p.settings.duration, FPS: p.settings.fps,
-      t: Math.min(t ?? bridge.getTime(), p.settings.duration), autoplay,
+      code, W, H, DURATION: durationOf(p), FPS: p.settings.fps,
+      t: Math.min(t ?? bridge.getTime(), durationOf(p)), autoplay,
     });
   }, [bridge]);
 
@@ -170,8 +175,8 @@ export default function App() {
   const engine = useMemo(() => new AudioEngine(), []);
   const currentAudio = project.versions[project.current]?.audio;
   useEffect(() => {
-    void engine.setClips(currentAudio?.clips ?? [], project.settings.duration);
-  }, [engine, currentAudio, project.settings.duration]);
+    void engine.setClips(currentAudio?.clips ?? [], videoDuration);
+  }, [engine, currentAudio, videoDuration]);
   useEffect(() => {
     engine.setVolumes({ ...laneVolumes(audioPrefs), muted: audioPrefs.muted });
   }, [engine, audioPrefs]);
@@ -302,6 +307,7 @@ export default function App() {
     abortRef.current = controller;
     setGenerating(true);
     setLiveCode(null);
+    setCodingStarted(false);
     setOverlay(useTeam ? `${MODEL_INFO[model].name} is planning the shots…` : isFirst ? "Claude is thinking…" : "Claude is editing…", true);
 
     // Stream events arrive faster than the screen refreshes, so push the turn to React once per frame.
@@ -323,7 +329,7 @@ export default function App() {
       let duration = p.settings.duration;
       if (p.settings.auto && !p.upload && !error) {
         setOverlay("Choosing the length…", true);
-        const plan = await planLength({ prompt, current: p.versions.length ? p.settings.duration : undefined, max: p.settings.maxDuration, key: anthropicKey, signal: controller.signal });
+        const plan = await planLength({ prompt, current: p.versions.length ? durationOf(p) : undefined, max: p.settings.maxDuration, key: anthropicKey, signal: controller.signal });
         if (plan) {
           duration = plan.seconds;
           turn.note = `${turn.note ? turn.note + " " : ""}Auto length: ${duration}s (max ${p.settings.maxDuration}s).`;
@@ -361,9 +367,11 @@ export default function App() {
           turn.text = summary;
           turn.phase = inCode ? "coding" : "writing";
           if (code) setLiveCode(code);
+          if (inCode) setCodingStarted(true);
           if (inCode) setOverlay(`Writing code… ${code.split("\n").length} lines`, true);
         } else if (event.type === "editing") {
           turn.phase = "coding";
+          setCodingStarted(true);
           setOverlay("Applying targeted edits…", true);
         } else if (event.type === "retry") {
           // The line edits didn't apply cleanly, so the model is rewriting the whole program instead.
@@ -378,6 +386,7 @@ export default function App() {
         } else if (event.type === "phase" && turn.team) {
           turn.team.phase = event.phase;
           turn.phase = event.phase === "planning" ? "thinking" : "animating";
+          if (event.phase !== "planning") setCodingStarted(true);
         } else if (event.type === "plan" && turn.team) {
           turn.team.scenes = event.scenes.map((sc: any) => ({ ...sc, status: "waiting", lines: 0 }));
           turn.text = `Shot list: ${event.scenes.length} scenes. Each one is being animated by its own Haiku agent in parallel.`;
@@ -413,7 +422,7 @@ export default function App() {
       const next: Project = {
         ...latest,
         title: isFirst ? titleFrom(latest.upload && prompt === DEFAULT_UPLOAD_PROMPT ? latest.upload.name.replace(/\.[^.]+$/, "") : prompt) : latest.title,
-        versions: [...latest.versions, { code, prompt: userText, audio: upAudio }],
+        versions: [...latest.versions, { code, prompt: userText, audio: upAudio, duration }],
         current: latest.versions.length,
       };
       turn.version = next.current;
@@ -492,7 +501,7 @@ export default function App() {
     audioAborts.current.set(key, controller);
     setJob(key, { stage: "planning", done: 0, total: 0 });
     generateAudio({
-      code: v.code, title: p.title, duration: p.settings.duration, scenes, previous,
+      code: v.code, title: p.title, duration: v.duration ?? p.settings.duration, scenes, previous,
       prompt: firstPrompt && firstPrompt !== v.prompt ? `${firstPrompt}\n\nLatest change: ${v.prompt}` : v.prompt,
       narration: prefs.narration, sfx: prefs.sfx, voiceId: prefs.voiceId, model,
       keys: { anthropic: anthropic!, elevenlabs: elevenlabs! },
@@ -534,7 +543,7 @@ export default function App() {
     if (!clip) return;
     const caption = patch.caption.trim();
     patchClip(project.id, project.current, id, {
-      start: Math.min(project.settings.duration, Math.max(0, patch.start)),
+      start: Math.min(videoDuration, Math.max(0, patch.start)),
       caption: caption && caption !== clip.text ? caption : undefined,
     });
   };
@@ -555,7 +564,7 @@ export default function App() {
     const newId = uid();
     await putClip(newId, blob);
     engine.remember(newId, buf);
-    patchClip(pid, vi, id, { id: newId, sourceId: undefined, offset: undefined, source: undefined, text: text.trim(), caption: undefined, duration: buf.duration, start: Math.min(project.settings.duration, Math.max(0, start)) });
+    patchClip(pid, vi, id, { id: newId, sourceId: undefined, offset: undefined, source: undefined, text: text.trim(), caption: undefined, duration: buf.duration, start: Math.min(videoDuration, Math.max(0, start)) });
     void deleteClips([id]);
   };
   const versionJobs: Record<number, AudioJob> = {};
@@ -613,9 +622,11 @@ export default function App() {
   };
 
   const changeSettings = (patch: Partial<Settings>) => {
-    const next = { ...project, settings: { ...project.settings, ...patch } };
+    let next = { ...project, settings: { ...project.settings, ...patch } };
+    // Pin older versions to the length they have now, so a new Duration only shapes the next version.
+    if ("duration" in patch) next = { ...next, versions: next.versions.map((v) => ({ ...v, duration: v.duration ?? project.settings.duration })) };
     updateProject(project.id, () => next);
-    if ("aspect" in patch || "duration" in patch || "fps" in patch) loadPreview(next, playing);
+    if ("aspect" in patch || "fps" in patch) loadPreview(next, playing);
   };
 
   const restoreVersion = (i: number) => {
@@ -630,7 +641,7 @@ export default function App() {
     if (abortRef.current || !code.trim()) return;
     const next: Project = {
       ...project,
-      versions: [...project.versions, { code, prompt: "Manual code edit", audio: project.upload ? project.versions[project.current]?.audio : undefined }],
+      versions: [...project.versions, { code, prompt: "Manual code edit", audio: project.upload ? project.versions[project.current]?.audio : undefined, duration: videoDuration }],
       current: project.versions.length,
       turns: [
         ...project.turns,
@@ -652,7 +663,8 @@ export default function App() {
   // ---------- export ----------
   const startExport = async () => {
     const [W, H] = dims(project.settings);
-    const { fps, duration } = project.settings;
+    const { fps } = project.settings;
+    const duration = videoDuration;
     const resumeAt = bridge.getTime();
     pause();
     exportCancelled.current = false;
@@ -701,19 +713,21 @@ export default function App() {
   }, [project.turns, project.current]);
 
   // ---------- render ----------
+  // A new video starts as a full-screen chat. It slides over to show the workspace once the model starts coding.
+  const focus = project.versions.length === 0 && !(generating && codingStarted);
   const [W, H] = dims(project.settings);
   const codeStatus = generating && liveCode
     ? `${liveCode.split("\n").length - 1} lines`
     : currentCode ? `Version ${project.current + 1} · ${currentCode.split("\n").length - 1} lines` : "No code yet";
 
   return (
-    <div className={`app ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}${resizing ? " resizing" : ""}`}
+    <div className={`app ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}${resizing ? " resizing" : ""}${focus ? " focus" : ""}`}
       style={chatW ? ({ "--chat-w": `${chatW}px` } as React.CSSProperties) : undefined}>
       <Sidebar open={sidebarOpen} onToggle={toggleSidebar} projects={projects} activeId={project.id} busy={generating}
         onSelect={selectProject} onNew={createProject} onDelete={deleteProject} theme={theme} onTheme={setTheme}
         userState={userState} onOpenSettings={() => { setSettingsTab("account"); setSettingsOpen(true); }} />
 
-      <main className="workspace">
+      <main className="workspace" aria-hidden={focus || undefined} inert={focus || undefined}>
         <header className="workspace-head">
           <button type="button" className="icon-btn mobile-only" onClick={toggleSidebar} aria-label="Open sidebar">
             <IconSidebar />
@@ -744,7 +758,7 @@ export default function App() {
               title={project.upload ? "The video is as long as your uploaded narration." : "Auto lets Claude pick the length from your request, up to the max you set."}
               onChange={(d) => (d === 0 ? changeSettings({ auto: true }) : changeSettings({ auto: false, duration: d }))}
               options={[
-                { value: 0, label: project.versions.length ? `Auto · ${project.settings.duration}s` : "Auto", hint: "up to your max" },
+                { value: 0, label: "Auto", hint: "up to your max" },
                 ...(DURATIONS.includes(project.settings.duration) || (project.settings.auto && !project.upload) ? DURATIONS : [...DURATIONS, project.settings.duration].sort((a, b) => a - b)).map((d) => ({ value: d, label: `${d}s` })),
               ]} />
             {project.settings.auto && !project.upload && (
@@ -761,7 +775,7 @@ export default function App() {
         </header>
 
         <Preview hidden={tab !== "preview"} bridge={bridge} width={W} height={H}
-          duration={project.settings.duration} fps={project.settings.fps}
+          duration={videoDuration} fps={project.settings.fps}
           overlay={overlay} onSlosh={onSlosh} runtimeError={runtimeError}
           onFix={() => runtimeError && generate({ prompt: "", error: runtimeError })} fixDisabled={generating}
           playing={playing} canPlay={canPlay} onTogglePlay={togglePlay}

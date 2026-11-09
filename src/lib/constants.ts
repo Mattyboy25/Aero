@@ -41,6 +41,7 @@ export const ANIMATION_STYLES: { value: AnimationStyle; label: string; desc: str
   { value: "kinetic", label: "Kinetic", desc: "Fast, punchy moves on a beat: slams, punch-ins, whip pans, big type." },
   { value: "playful", label: "Playful", desc: "Bouncy springs, squash and stretch, pop-ins and friendly shapes." },
   { value: "cinematic", label: "Cinematic", desc: "Slow dramatic dolly moves, depth, parallax, dissolves and film look." },
+  { value: "storytelling", label: "Storytelling", desc: "A story arc with a focal subject, motivated pacing, caption-style text and continuity between beats." },
   { value: "immersive", label: "Immersive", desc: "Fly through a 3D space with depth, fog, orbits and things rushing past." },
 ];
 

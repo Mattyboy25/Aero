@@ -1,7 +1,7 @@
 export type Aspect = "16:9" | "9:16" | "1:1" | "4:5";
 export type Effort = "low" | "medium" | "high";
 export type Engine = "solo" | "team";
-export type AnimationStyle = "auto" | "minimal" | "smooth" | "kinetic" | "playful" | "cinematic" | "immersive";
+export type AnimationStyle = "auto" | "minimal" | "smooth" | "kinetic" | "playful" | "cinematic" | "storytelling" | "immersive";
 export type ModelKey = "opus" | "sonnet" | "haiku";
 export type Theme = "light" | "dark" | "system";
 export type Accent = "terracotta" | "blue" | "violet" | "green" | "rose" | "amber";
@@ -104,6 +104,8 @@ export interface Version {
   code: string;
   prompt: string;
   audio?: VersionAudio;
+  /** Length of this version in seconds, fixed when it was made. Older saves fall back to the project's setting. */
+  duration?: number;
 }
 
 /** Progress of a narration/sound job, kept in memory only. */
