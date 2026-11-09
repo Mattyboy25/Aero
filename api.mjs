@@ -6,6 +6,8 @@ import { SYSTEM_PROMPT } from "./prompt.mjs";
 import { runTeam } from "./team.mjs";
 import { pickModel, streamMessage } from "./models.mjs";
 import { applyEdits, parseEdits } from "./edits.mjs";
+import { router as audioRouter } from "./audio.mjs";
+import { cleanNarration, narrationBlock } from "./narration.mjs";
 
 const EFFORTS = new Set(["low", "medium", "high"]);
 
@@ -19,12 +21,14 @@ const cleanKey = (v) => (typeof v === "string" && v.trim().length >= 8 && v.leng
 const NEEDS_KEY = "Add your Anthropic API key in Settings > API to generate videos.";
 
 app.use(express.json({ limit: "2mb" }));
+app.use("/api/audio", audioRouter);
 
-function buildUserMessage({ prompt, code, error, settings }) {
+function buildUserMessage({ prompt, code, error, settings, narration }) {
   const { width, height, duration, fps } = settings;
   const parts = [
     `Video settings: ${width}x${height} pixels, ${duration} seconds, ${fps} fps.`,
   ];
+  if (narration) parts.push(narrationBlock(narration, duration));
   if (code) parts.push(`<current_code>\n${code}\n</current_code>`);
   if (error) parts.push(`<runtime_error>\n${error}\n</runtime_error>`);
   parts.push(`<request>\n${prompt}\n</request>`);
@@ -32,7 +36,7 @@ function buildUserMessage({ prompt, code, error, settings }) {
 }
 
 app.post("/api/generate", async (req, res) => {
-  const { prompt, code, error, settings, effort, mode, model } = req.body ?? {};
+  const { prompt, code, error, settings, effort, mode, model, narration: rawNarration } = req.body ?? {};
   const modelKey = pickModel(model);
   const apiKey = cleanKey(req.get(ANTHROPIC_KEY_HEADER));
   if (!apiKey) return res.status(401).json({ error: NEEDS_KEY });
@@ -46,6 +50,8 @@ app.post("/api/generate", async (req, res) => {
     duration: clampInt(settings?.duration, 1, 60, 8),
     fps: clampInt(settings?.fps, 12, 60, 30),
   };
+
+  const narration = cleanNarration(rawNarration, s.duration);
 
   // Server-sent events back to the browser.
   res.writeHead(200, {
@@ -75,6 +81,7 @@ app.post("/api/generate", async (req, res) => {
         client,
         prompt: prompt.trim(),
         settings: s,
+        narration,
         model: modelKey,
         effort: opusEffort,
         send,
@@ -94,7 +101,7 @@ app.post("/api/generate", async (req, res) => {
       system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content }],
     });
-    const userContent = buildUserMessage({ prompt: prompt.trim(), code: currentCode, error: runtimeError, settings: s });
+    const userContent = buildUserMessage({ prompt: prompt.trim(), code: currentCode, error: runtimeError, settings: s, narration });
 
     // Streams one answer. Text is forwarded live, except an ```edit block, which is held back
     // so it can be applied to the current code and sent on as a complete program.

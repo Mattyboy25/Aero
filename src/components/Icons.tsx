@@ -30,8 +30,14 @@ export const IconSettings = (p: P) => <Base {...p}><circle cx="12" cy="12" r="3"
 export const IconClose = (p: P) => <Base {...p}><path d="M6 6l12 12M18 6L6 18" /></Base>;
 export const IconSelector = (p: P) => <Base {...p}><path d="M8 9.5l4-4 4 4M8 14.5l4 4 4-4" /></Base>;
 export const IconMic = (p: P) => <Base {...p}><rect x="9" y="3.5" width="6" height="11" rx="3" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7" /></Base>;
-export const IconVolume = (p: P) => <Base {...p}><path d="M4 9.5v5h3.5l5 4v-13l-5 4z" fill="currentColor" stroke="none" /><path d="M16 9a4.2 4.2 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" /></Base>;
+export const IconVolumeOff = (p: P) => <Base {...p}><path d="M4 9.5v5h3.5l5 4v-13l-5 4z" fill="currentColor" stroke="none" /><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" /></Base>;
+export const IconVolume =(p: P) => <Base {...p}><path d="M4 9.5v5h3.5l5 4v-13l-5 4z" fill="currentColor" stroke="none" /><path d="M16 9a4.2 4.2 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" /></Base>;
 export const IconKey = (p: P) => <Base {...p}><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3M13.5 9.5l2 2" /></Base>;
 export const IconLock = (p: P) => <Base {...p}><rect x="5" y="10.5" width="14" height="9.5" rx="2.5" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" /></Base>;
 export const IconEye = (p: P) => <Base {...p}><path d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" /><circle cx="12" cy="12" r="2.8" /></Base>;
 export const IconEyeOff = (p: P) => <Base {...p}><path d="M3 3l18 18M10.2 6a9.7 9.7 0 0 1 1.8-.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-2.6 3.4M6.5 7.6A15.7 15.7 0 0 0 2.5 12S6 18.5 12 18.5c1.4 0 2.7-.3 3.8-.8M9.9 9.9a2.8 2.8 0 0 0 4 4" /></Base>;
+export const IconMinus = (p: P) => <Base {...p}><path d="M5 12h14" /></Base>;
+export const IconSkipBack = (p: P) => <Base {...p}><path d="M6 5v14" /><path d="M19 5.5v13L9.5 12z" fill="currentColor" stroke="none" /></Base>;
+export const IconSkipForward = (p: P) => <Base {...p}><path d="M18 5v14" /><path d="M5 5.5v13L14.5 12z" fill="currentColor" stroke="none" /></Base>;
+export const IconPaperclip = (p: P) => <Base {...p}><path d="M20 11.5l-7.8 7.8a4.6 4.6 0 0 1-6.5-6.5l8.3-8.3a3.1 3.1 0 0 1 4.4 4.4l-8.3 8.3a1.5 1.5 0 0 1-2.2-2.2l7.6-7.6" /></Base>;
+export const IconWaveform = (p: P) => <Base {...p}><path d="M4 10v4M8 6.5v11M12 3.5v17M16 7.5v9M20 10v4" /></Base>;

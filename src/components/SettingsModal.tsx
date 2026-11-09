@@ -3,8 +3,9 @@ import type { Accent, Effort, Engine, ModelKey, Theme } from "../types";
 import { ACCENTS, EFFORT_LABELS, MODEL_INFO, MODEL_KEYS } from "../lib/constants";
 import type { User } from "../lib/user";
 import { Avatar, ThemeSwitch } from "./UserMenu";
-import { IconClose, IconDatabase, IconEye, IconEyeOff, IconKey, IconLock, IconMic, IconSparkle, IconSun, IconUser, IconVolume } from "./Icons";
-import { checkKey, maskKey, type ApiKeys, type Provider } from "../lib/keys";
+import { IconClose, IconPause, IconPlay, IconDatabase, IconEye, IconEyeOff, IconKey, IconLock, IconMic, IconSparkle, IconSun, IconUser, IconVolume } from "./Icons";
+import { checkKey, KEY_HEADERS, maskKey, type ApiKeys, type Provider } from "../lib/keys";
+import { DEFAULT_VOICE, type AudioPrefs } from "../lib/audioPrefs";
 import { Select } from "./Select";
 
 const TABS = [
@@ -37,15 +38,73 @@ function Segmented<T extends string>({ label, value, options, onChange }: {
   );
 }
 
-const VOICE_OPTIONS = [{ value: "default", label: "Default" }];
-
-// Videos have no audio yet, so the Voice and Sound effects pages show what is coming, switched off.
-function SoonBadge() { return <span className="badge">Coming soon</span>; }
-
-function Switch({ label, checked = false, disabled }: { label: string; checked?: boolean; disabled?: boolean }) {
+function Switch({ label, checked = false, disabled, onChange }: { label: string; checked?: boolean; disabled?: boolean; onChange?: (on: boolean) => void }) {
   return (
     <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled}
-      className={`switch ${checked ? "on" : ""}`}><span className="switch-thumb" /></button>
+      className={`switch ${checked ? "on" : ""}`} onClick={() => onChange?.(!checked)}><span className="switch-thumb" /></button>
+  );
+}
+
+function Volume({ label, value, disabled, onChange }: { label: string; value: number; disabled?: boolean; onChange: (v: number) => void }) {
+  return (
+    <div className="range-wrap">
+      <input type="range" className="set-range" min={0} max={100} value={value} disabled={disabled} aria-label={label}
+        style={{ "--pct": `${value}%` } as React.CSSProperties} onChange={(e) => onChange(Number(e.target.value))} />
+      <span className="range-val">{value}%</span>
+    </div>
+  );
+}
+
+interface Voice { id: string; name: string; desc: string; preview: string | null }
+
+// The voices on the user's ElevenLabs account, loaded once the Voice page opens.
+function useVoices(key: string | null) {
+  const [voices, setVoices] = useState<Voice[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!key) return;
+    let alive = true;
+    fetch("/api/audio/voices", { headers: { [KEY_HEADERS.elevenlabs]: key } })
+      .then(async (r) => (r.ok ? r.json() : Promise.reject(new Error((await r.json().catch(() => ({}))).error || "Couldn't load voices."))))
+      .then((d) => { if (alive) setVoices(d.voices); })
+      .catch((e) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [key]);
+  return { voices, error };
+}
+
+function VoicePreview({ url }: { url: string | null }) {
+  const [audio] = useState(() => new Audio());
+  const [playing, setPlaying] = useState(false);
+  useEffect(() => {
+    const stop = () => setPlaying(false);
+    audio.addEventListener("ended", stop);
+    audio.addEventListener("pause", stop);
+    return () => { audio.pause(); audio.removeEventListener("ended", stop); audio.removeEventListener("pause", stop); };
+  }, [audio]);
+  useEffect(() => { audio.pause(); }, [audio, url]);
+  if (!url) return null;
+  const toggle = () => {
+    if (playing) { audio.pause(); return; }
+    audio.src = url;
+    void audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+  };
+  return (
+    <button type="button" className="icon-btn" onClick={toggle} aria-label={playing ? "Stop preview" : "Play a sample of this voice"} title={playing ? "Stop" : "Preview voice"}>
+      {playing ? <IconPause width={15} height={15} /> : <IconPlay width={14} height={14} />}
+    </button>
+  );
+}
+
+function AudioWhen({ prefs, onPrefs }: { prefs: AudioPrefs; onPrefs: (p: Partial<AudioPrefs>) => void }) {
+  return (
+    <div className="set-row set-gap">
+      <div className="set-info">
+        <span className="set-title">Generate with new versions</span>
+        <span className="set-desc">Add narration and sound automatically after Claude finishes each version. When this is off, use "Add narration &amp; sound" on any version in the chat. Same as the Audio button by the prompt box.</span>
+      </div>
+      <Switch label="Generate with new versions" checked={prefs.auto} onChange={(auto) => onPrefs({ auto })} />
+    </div>
   );
 }
 
@@ -170,14 +229,17 @@ interface Props {
   effort: Effort;
   onEffort: (e: Effort) => void;
   apiKeys: ApiKeys;
+  audioPrefs: AudioPrefs;
+  onAudioPrefs: (patch: Partial<AudioPrefs>) => void;
   initialTab?: SettingsTab;
   onClose: () => void;
 }
 
-export function SettingsModal({ user, signedIn, theme, onTheme, accent, onAccent, model, onModel, mode, onMode, effort, onEffort, apiKeys, initialTab = "account", onClose }: Props) {
+export function SettingsModal({ user, signedIn, theme, onTheme, accent, onAccent, model, onModel, mode, onMode, effort, onEffort, apiKeys, audioPrefs, onAudioPrefs, initialTab = "account", onClose }: Props) {
   const card = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<TabId>(initialTab);
   const active = TABS.find((t) => t.id === tab)!;
+  const { voices, error: voiceError } = useVoices(tab === "voice" ? apiKeys.keys.elevenlabs : null);
   const lock = !apiKeys.ready ? null
     : tab === "model" && !apiKeys.keys.anthropic ? LOCKS.anthropic
     : (tab === "voice" || tab === "sound") && !apiKeys.keys.elevenlabs ? LOCKS.elevenlabs
@@ -293,38 +355,56 @@ export function SettingsModal({ user, signedIn, theme, onTheme, accent, onAccent
               <section className="set-section">
                 <div className="set-row">
                   <div className="set-info">
-                    <span className="set-title">Narration <SoonBadge /></span>
-                    <span className="set-desc">Add an AI voiceover that reads a script alongside your video.</span>
+                    <span className="set-title">Narration</span>
+                    <span className="set-desc">Claude writes a voiceover timed to your animation, and ElevenLabs reads it.</span>
                   </div>
-                  <Switch label="Narration" disabled />
+                  <Switch label="Narration" checked={audioPrefs.narration} onChange={(narration) => onAudioPrefs({ narration })} />
                 </div>
                 <div className="set-row set-gap">
                   <div className="set-info">
                     <span className="set-title">Voice</span>
-                    <span className="set-desc">Pick who narrates your videos.</span>
+                    <span className="set-desc">{voiceError ?? (voices?.find((v) => v.id === audioPrefs.voiceId)?.desc || "Who narrates your videos.")}</span>
                   </div>
-                  <Select<string> label="Voice" value="default" onChange={() => {}} options={VOICE_OPTIONS} disabled />
+                  <div className="voice-pick">
+                    <VoicePreview url={voices?.find((v) => v.id === audioPrefs.voiceId)?.preview ?? null} />
+                    <Select<string> label="Voice" value={audioPrefs.voiceId} disabled={!audioPrefs.narration}
+                      onChange={(id) => onAudioPrefs({ voiceId: id, voiceName: voices?.find((v) => v.id === id)?.name ?? id })}
+                      options={voices?.length
+                        ? (voices.some((v) => v.id === audioPrefs.voiceId) ? voices : [{ id: audioPrefs.voiceId, name: audioPrefs.voiceName }, ...voices])
+                            .map((v) => ({ value: v.id, label: v.name }))
+                        : [{ value: audioPrefs.voiceId, label: voices ? audioPrefs.voiceName : `${audioPrefs.voiceName}${voiceError ? "" : " (loading…)"}` },
+                           ...(audioPrefs.voiceId === DEFAULT_VOICE.id ? [] : [{ value: DEFAULT_VOICE.id, label: DEFAULT_VOICE.name }])]} />
+                  </div>
                 </div>
-                <p className="set-foot">Videos have no audio yet. These settings will apply to new videos once narration is available.</p>
+                <div className="set-row set-gap">
+                  <div className="set-info">
+                    <span className="set-title">Narration volume</span>
+                    <span className="set-desc">Applies to playback and exported videos.</span>
+                  </div>
+                  <Volume label="Narration volume" value={audioPrefs.narrationVolume} onChange={(narrationVolume) => onAudioPrefs({ narrationVolume })} />
+                </div>
+                <AudioWhen prefs={audioPrefs} onPrefs={onAudioPrefs} />
+                <p className="set-foot">Narration uses your ElevenLabs credits (about one credit per character) and a short planning request on your Anthropic key.</p>
               </section>
             )}
             {tab === "sound" && (
               <section className="set-section">
                 <div className="set-row">
                   <div className="set-info">
-                    <span className="set-title">Sound effects <SoonBadge /></span>
-                    <span className="set-desc">Add sounds that match the motion on screen, like whooshes, clicks and impacts.</span>
+                    <span className="set-title">Sound effects</span>
+                    <span className="set-desc">Sounds that land on the motion on screen, like whooshes, clicks, impacts and a quiet ambient bed.</span>
                   </div>
-                  <Switch label="Sound effects" disabled />
+                  <Switch label="Sound effects" checked={audioPrefs.sfx} onChange={(sfx) => onAudioPrefs({ sfx })} />
                 </div>
                 <div className="set-row set-gap">
                   <div className="set-info">
                     <span className="set-title">Volume</span>
-                    <span className="set-desc">How loud sound effects are.</span>
+                    <span className="set-desc">How loud sound effects are under the narration.</span>
                   </div>
-                  <input type="range" className="set-range" min={0} max={100} defaultValue={60} disabled aria-label="Sound effects volume" />
+                  <Volume label="Sound effects volume" value={audioPrefs.sfxVolume} onChange={(sfxVolume) => onAudioPrefs({ sfxVolume })} />
                 </div>
-                <p className="set-foot">Videos have no audio yet. These settings will apply to new videos once sound effects are available.</p>
+                <AudioWhen prefs={audioPrefs} onPrefs={onAudioPrefs} />
+                <p className="set-foot">Each sound effect uses ElevenLabs credits based on its length. Changes apply to audio you generate from now on; volume changes apply right away.</p>
               </section>
             )}
             {tab === "storage" && (

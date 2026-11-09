@@ -45,6 +45,8 @@ export class RuntimeBridge {
     this.setTime(opts.t);
     this.post({ type: "load", ...opts });
   }
+  /** Captions to draw into rendered frames (used for export). Null turns them off. */
+  setCaptions(lines: { start: number; end: number; text: string }[] | null) { this.post({ type: "captions", lines }); }
   play() { this.post({ type: "play" }); }
   pause() { this.post({ type: "pause" }); }
   seek(t: number) {

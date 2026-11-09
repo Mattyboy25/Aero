@@ -213,11 +213,51 @@
   }
   const resetContext = () => resetCtx(ctx);
 
+  // Captions drawn into the frame itself. The app turns this on for export; the preview shows
+  // captions as an overlay, so they would show twice if this were on while playing.
+  let captionLines = null;
+  function drawCaptions(c, t) {
+    const line = captionLines.find((l) => t >= l.start && t < l.end);
+    if (!line || !String(line.text).trim()) return;
+    const W = cfg.W, H = cfg.H, u = Math.min(W, H) / 1000;
+    const size = Math.round(42 * u), padX = size * 0.6, lineH = size * 1.35;
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = "source-over";
+    c.filter = "none";
+    c.shadowBlur = 0;
+    c.font = `550 ${size}px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    const maxW = W * 0.88 - padX * 2;
+    const rows = [];
+    let row = "";
+    for (const word of String(line.text).trim().split(/\s+/)) {
+      const test = row ? row + " " + word : word;
+      if (row && c.measureText(test).width > maxW) { rows.push(row); row = word; } else row = test;
+    }
+    if (row) rows.push(row);
+    // The last row sits 7% above the bottom edge, like the preview overlay.
+    rows.forEach((text, i) => {
+      const w = c.measureText(text).width + padX * 2;
+      const cy = H * 0.93 - lineH / 2 - (rows.length - 1 - i) * lineH;
+      c.fillStyle = "rgba(0, 0, 0, 0.72)";
+      c.beginPath();
+      if (c.roundRect) c.roundRect(W / 2 - w / 2, cy - lineH / 2, w, lineH, size * 0.18); else c.rect(W / 2 - w / 2, cy - lineH / 2, w, lineH);
+      c.fill();
+      c.fillStyle = "#fff";
+      c.fillText(text, W / 2, cy + size * 0.03);
+    });
+    c.restore();
+  }
+
   function render(t) {
     if (!program || failed) return false;
     resetContext();
     try {
       program.draw(ctx, t);
+      if (captionLines) drawCaptions(ctx, t);
       return true;
     } catch (err) {
       fail(err, t);
@@ -270,6 +310,9 @@
         break;
       case "pause":
         playing = false;
+        break;
+      case "captions":
+        captionLines = Array.isArray(m.lines) && m.lines.length ? m.lines : null;
         break;
       case "seek":
         time = clamp(m.t, 0, cfg.DURATION);

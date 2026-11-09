@@ -1,58 +1,166 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from "react";
 import type { RuntimeBridge } from "../lib/runtime";
+import type { AudioClip, AudioJob, ClipKind, VersionAudio } from "../types";
 import { fmtTime } from "../lib/constants";
-import { IconPause, IconPlay, IconStepBack, IconStepForward } from "./Icons";
+import { IconEye, IconEyeOff, IconVolume, IconVolumeOff } from "./Icons";
 
 export interface Segment { start: number; end: number; title: string }
 
+type Ref<T> = { current: T };
+interface Anchor { time: number; px: number }
+
+// ---------- zoom ----------
+// Zoom 1 fits the whole video in view; higher values stretch the timeline and scroll sideways.
+export const MAX_ZOOM = 40;
+
+export interface ZoomApi {
+  zoom: number;
+  setZoom: (z: number) => void;
+  /** Which moment stays put on screen while the zoom changes. Defaults to the playhead. */
+  anchor: Ref<Anchor | null>;
+  defaultAnchor: Ref<(() => Anchor) | null>;
+}
+
+export function useTimelineZoom(): ZoomApi {
+  const [zoom, setZ] = useState(1);
+  const zoomRef = useRef(1);
+  const anchor = useRef<Anchor | null>(null);
+  const defaultAnchor = useRef<(() => Anchor) | null>(null);
+  const setZoom = useCallback((z: number) => {
+    const next = Math.min(MAX_ZOOM, Math.max(1, z));
+    if (Math.abs(next - zoomRef.current) < 1e-4) { anchor.current = null; return; }
+    anchor.current ??= defaultAnchor.current?.() ?? null;
+    zoomRef.current = next;
+    setZ(next);
+  }, []);
+  return { zoom, setZoom, anchor, defaultAnchor };
+}
+
+// ---------- ruler ----------
+const MAJOR_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60];
+const MINOR_COUNT: Record<number, number> = { 0.1: 2, 0.2: 4, 0.5: 5, 1: 4, 2: 4, 5: 5, 10: 5, 15: 3, 30: 3, 60: 6 };
+
+function tickLabel(s: number) {
+  if (s >= 60) return `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+  return `${+s.toFixed(2)}s`;
+}
+
+function buildTicks(contentW: number, duration: number, fps: number) {
+  const majors: number[] = [];
+  const minors: number[] = [];
+  if (!contentW || !duration) return { majors, minors };
+  const pps = contentW / duration;
+  const major = MAJOR_STEPS.find((s) => s * pps >= 72) ?? 60;
+  let minorStep = major / (MINOR_COUNT[major] ?? 4);
+  // Zoomed in far enough, every frame gets its own tick.
+  if (pps / fps >= 9 && major * fps <= 60) minorStep = 1 / fps;
+  const count = Math.floor(duration / minorStep + 1e-6);
+  for (let i = 0; i <= count; i++) {
+    const t = Math.round(i * minorStep * 10000) / 10000;
+    if (Math.abs(t / major - Math.round(t / major)) < 1e-4) majors.push(t);
+    else if (minorStep * pps >= 5) minors.push(t);
+  }
+  return { majors, minors };
+}
+
+// ---------- component ----------
 interface Props {
   bridge: RuntimeBridge;
   duration: number;
   fps: number;
   playing: boolean;
   canPlay: boolean;
+  /** Scene spans (Team mode). Without them, the video is one clip. */
   segments: Segment[];
-  onTogglePlay: () => void;
+  clipLabel: string;
+  zoomApi: ZoomApi;
   onScrub: (t: number) => void;
+  audio?: VersionAudio;
+  audioJob?: AudioJob;
+  onAddAudio?: () => void;
+  onEditCaption?: (id: string, patch: { caption: string; start: number }) => void;
+  onRevoiceCaption?: (id: string, text: string, start: number) => Promise<void>;
+  showCaptions: boolean;
+  onToggleCaptions: () => void;
+  narrationMuted: boolean;
+  sfxMuted: boolean;
+  onToggleLaneMute: (kind: ClipKind) => void;
 }
 
-const MAJOR_STEPS = [0.5, 1, 2, 5, 10, 15, 30];
-const MINOR_COUNT: Record<number, number> = { 0.5: 5, 1: 4, 2: 4, 5: 5, 10: 5, 15: 3, 30: 3 };
-
-function tickLabel(s: number) {
-  if (s >= 60) return `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-  return Number.isInteger(s) ? `${s}s` : `${s.toFixed(1)}s`;
-}
-
-// Accepts "3.5", "1:02.5", or "f90" (a frame number).
-function parseTime(input: string, fps: number): number | null {
-  const s = input.trim();
-  if (!s) return null;
-  const frame = s.match(/^f\s*(\d+)$/i);
-  if (frame) return Number(frame[1]) / fps;
-  const m = s.match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
-  return m ? (m[1] ? Number(m[1]) * 60 : 0) + Number(m[2]) : null;
-}
-
-export function Timeline({ bridge, duration, fps, playing, canPlay, segments, onTogglePlay, onScrub }: Props) {
+export function Timeline({ bridge, duration, fps, playing, canPlay, segments, clipLabel, zoomApi, onScrub, audio, audioJob, onAddAudio, onEditCaption, onRevoiceCaption,
+  showCaptions, onToggleCaptions, narrationMuted, sfxMuted, onToggleLaneMute }: Props) {
+  const [editing, setEditing] = useState<{ id: string; rect: DOMRect } | null>(null);
   const time = useSyncExternalStore(bridge.subscribe, bridge.getTime);
-  const track = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  const [hover, setHover] = useState<number | null>(null); // time under the pointer
+  const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const [viewW, setViewW] = useState(0);
+  const [hover, setHover] = useState<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  const { zoom, setZoom, anchor, defaultAnchor } = zoomApi;
+  const contentW = viewW ? Math.max(viewW, viewW * zoom) : 0;
 
   useLayoutEffect(() => {
-    const el = track.current!;
-    setWidth(el.clientWidth);
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    const el = scroller.current!;
+    setViewW(el.clientWidth);
+    const ro = new ResizeObserver(() => setViewW(el.clientWidth));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
   const snap = useCallback((t: number) => Math.min(duration, Math.max(0, Math.round(t * fps) / fps)), [duration, fps]);
   const frameOf = (t: number) => Math.round(t * fps);
-  const totalFrames = Math.round(duration * fps);
+  const pct = (t: number) => (duration ? (Math.min(duration, Math.max(0, t)) / duration) * 100 : 0);
 
+  // ---- zoom: keep the anchored moment where it was on screen ----
+  useEffect(() => {
+    defaultAnchor.current = () => {
+      const sc = scroller.current!, ct = content.current!;
+      const t = bridge.getTime();
+      const sr = sc.getBoundingClientRect(), cr = ct.getBoundingClientRect();
+      const px = cr.left + (duration ? (t / duration) * cr.width : 0) - sr.left;
+      return { time: t, px: Math.min(sc.clientWidth, Math.max(0, px)) };
+    };
+    return () => { defaultAnchor.current = null; };
+  }, [bridge, defaultAnchor, duration]);
+
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    if (!a) return;
+    anchor.current = null;
+    const sc = scroller.current!, ct = content.current!;
+    sc.scrollLeft = (duration ? (a.time / duration) * ct.offsetWidth : 0) - a.px;
+  }, [zoom, anchor, duration]);
+
+  // Ctrl/Cmd + wheel zooms at the pointer; a plain wheel scrolls sideways when zoomed in.
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  useEffect(() => {
+    const sc = scroller.current!;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const cr = content.current!.getBoundingClientRect();
+        const sr = sc.getBoundingClientRect();
+        anchor.current = { time: duration ? ((e.clientX - cr.left) / cr.width) * duration : 0, px: e.clientX - sr.left };
+        setZoom(zoomRef.current * Math.exp(-e.deltaY * 0.004));
+      } else if (zoomRef.current > 1 && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        sc.scrollLeft += e.deltaY;
+      }
+    };
+    sc.addEventListener("wheel", onWheel, { passive: false });
+    return () => sc.removeEventListener("wheel", onWheel);
+  }, [anchor, setZoom, duration]);
+
+  // While playing zoomed in, keep the playhead in view.
+  useEffect(() => {
+    if (!playing || dragging || zoom <= 1 || !contentW) return;
+    const sc = scroller.current!;
+    const x = (time / duration) * contentW;
+    if (x > sc.scrollLeft + sc.clientWidth - 48 || x < sc.scrollLeft) sc.scrollLeft = x - sc.clientWidth * 0.2;
+  }, [time, playing, dragging, zoom, contentW, duration]);
+
+  // ---- scrubbing ----
   // Seeking renders a frame in the iframe, so coalesce pointer events to one seek per screen refresh.
   const pending = useRef<number | null>(null);
   const raf = useRef(0);
@@ -68,7 +176,7 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, on
   useEffect(() => () => cancelAnimationFrame(raf.current), []);
 
   const timeAt = (e: PointerEvent) => {
-    const r = track.current!.getBoundingClientRect();
+    const r = content.current!.getBoundingClientRect();
     return snap(((e.clientX - r.left) / r.width) * duration);
   };
   const onDown = (e: PointerEvent) => {
@@ -76,7 +184,7 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, on
     // Stop the browser from starting a text drag (the "forbidden" cursor) if something is selected.
     e.preventDefault();
     window.getSelection()?.removeAllRanges();
-    (e.currentTarget as HTMLElement).focus({ preventScroll: true });
+    scroller.current!.focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragging(true);
     const t = timeAt(e);
@@ -86,7 +194,13 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, on
   const onMove = (e: PointerEvent) => {
     const t = timeAt(e);
     setHover(t);
-    if (dragging) seek(t);
+    if (!dragging) return;
+    seek(t);
+    // Dragging near an edge scrolls the timeline along.
+    const sc = scroller.current!;
+    const r = sc.getBoundingClientRect();
+    if (e.clientX > r.right - 32) sc.scrollLeft += 18;
+    else if (e.clientX < r.left + 32) sc.scrollLeft -= 18;
   };
   const onUp = (e: PointerEvent) => {
     setDragging(false);
@@ -103,115 +217,257 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, on
     if (keys[e.key] && canPlay) { e.preventDefault(); keys[e.key](); }
   };
 
-  // Ruler marks: pick a spacing that keeps labels about 64px apart.
-  const ticks = useMemo(() => {
-    if (!width || !duration) return { majors: [] as number[], minors: [] as number[] };
-    const pxPerSec = width / duration;
-    const major = MAJOR_STEPS.find((s) => s * pxPerSec >= 64) ?? MAJOR_STEPS[MAJOR_STEPS.length - 1];
-    const minorStep = major / (MINOR_COUNT[major] ?? 4);
-    const majors: number[] = [];
-    const minors: number[] = [];
-    for (let i = 0; i * minorStep <= duration + 1e-6; i++) {
-      const t = Math.round(i * minorStep * 1000) / 1000;
-      if (Math.abs(t / major - Math.round(t / major)) < 1e-6) majors.push(t);
-      else if (minorStep * pxPerSec >= 7) minors.push(t);
-    }
-    return { majors, minors };
-  }, [width, duration]);
-
-  const pct = (t: number) => (duration ? (Math.min(duration, Math.max(0, t)) / duration) * 100 : 0);
-  const shown = dragging ? time : hover;
+  const ticks = useMemo(() => buildTicks(contentW, duration, fps), [contentW, duration, fps]);
+  const clips = segments.length ? segments : [{ start: 0, end: duration, title: clipLabel }];
+  const badgeLeft = hover === null || !contentW ? 0 : Math.min(contentW - 52, Math.max(52, (hover / duration) * contentW));
 
   return (
-    <div className="transport">
-      <div className="transport-buttons">
-        <button type="button" className="icon-btn" onClick={() => step(-1)} disabled={!canPlay} aria-label="Previous frame" title="Previous frame (←)">
-          <IconStepBack width={16} height={16} />
-        </button>
-        <button type="button" className="play-btn" onClick={onTogglePlay} disabled={!canPlay} aria-label={playing ? "Pause" : "Play"} title="Play / pause (Space)">
-          {playing ? <IconPause /> : <IconPlay />}
-        </button>
-        <button type="button" className="icon-btn" onClick={() => step(1)} disabled={!canPlay} aria-label="Next frame" title="Next frame (→)">
-          <IconStepForward width={16} height={16} />
-        </button>
+    <div className={`tl ${canPlay ? "" : "disabled"} ${dragging ? "dragging" : ""}`}>
+      <div className="tl-gutter">
+        <div className="tl-corner" />
+        <div className={`tl-label ${showCaptions ? "" : "off"}`}>
+          <span>Captions</span>
+          <button type="button" className="lane-toggle" onClick={onToggleCaptions} aria-pressed={!showCaptions}
+            aria-label={showCaptions ? "Hide captions" : "Show captions"} title={showCaptions ? "Hide captions on the preview" : "Show captions on the preview"}>
+            {showCaptions ? <IconEye width={14} height={14} /> : <IconEyeOff width={14} height={14} />}
+          </button>
+        </div>
+        <div className="tl-label video"><span>Video</span></div>
+        <div className={`tl-label ${narrationMuted ? "off" : ""}`}>
+          <span>Voice</span>
+          <button type="button" className="lane-toggle" onClick={() => onToggleLaneMute("narration")} aria-pressed={narrationMuted}
+            aria-label={narrationMuted ? "Unmute voice" : "Mute voice"} title={narrationMuted ? "Unmute the voice (playback and export)" : "Mute the voice (playback and export)"}>
+            {narrationMuted ? <IconVolumeOff width={14} height={14} /> : <IconVolume width={14} height={14} />}
+          </button>
+        </div>
+        <div className={`tl-label ${sfxMuted ? "off" : ""}`}>
+          <span>Sound effects</span>
+          <button type="button" className="lane-toggle" onClick={() => onToggleLaneMute("sfx")} aria-pressed={sfxMuted}
+            aria-label={sfxMuted ? "Unmute sound effects" : "Mute sound effects"} title={sfxMuted ? "Unmute sound effects (playback and export)" : "Mute sound effects (playback and export)"}>
+            {sfxMuted ? <IconVolumeOff width={14} height={14} /> : <IconVolume width={14} height={14} />}
+          </button>
+        </div>
       </div>
 
-      <Timecode time={time} fps={fps} disabled={!canPlay} onCommit={(s) => {
-        const t = parseTime(s, fps);
-        if (t !== null) onScrub(snap(t));
-      }} />
-
-      <div className={`timeline ${canPlay ? "" : "disabled"} ${dragging ? "dragging" : ""}`}>
-        <div className="ruler" aria-hidden="true">
-          {ticks.minors.map((t) => <span key={`m${t}`} className="tick minor" style={{ left: `${pct(t)}%` }} />)}
-          {ticks.majors.map((t) => (
-            <span key={`M${t}`} className="tick major" style={{ left: `${pct(t)}%` }}>
-              <span className="tick-label" data-edge={t === 0 ? "start" : t >= duration ? "end" : undefined}>{tickLabel(t)}</span>
-            </span>
-          ))}
-        </div>
-
-        <div ref={track} className="track" role="slider" tabIndex={canPlay ? 0 : -1} aria-label="Timeline"
-          aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Number(time.toFixed(2))} aria-valuetext={`${fmtTime(time)}, frame ${frameOf(time)}`}
-          aria-disabled={!canPlay} onDragStart={(e) => e.preventDefault()} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
-          onPointerLeave={() => { if (!dragging) setHover(null); }} onKeyDown={onKey}>
-          <div className="rail">
-            {segments.map((s, i) => (
-              <span key={i} className="segment" title={`${s.title} · ${fmtTime(s.start)}–${fmtTime(s.end)}`}
-                style={{ left: `${pct(s.start)}%`, width: `${pct(s.end) - pct(s.start)}%` }} />
+      <div ref={scroller} className="tl-scroll" tabIndex={canPlay ? 0 : -1} role="slider" aria-label="Timeline"
+        aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Number(time.toFixed(2))}
+        aria-valuetext={`${fmtTime(time)}, frame ${frameOf(time)}`} aria-disabled={!canPlay} onKeyDown={onKey}>
+        <div ref={content} className="tl-content" style={{ width: contentW || "100%" }}
+          onDragStart={(e) => e.preventDefault()} onPointerDown={onDown} onPointerMove={onMove}
+          onPointerUp={onUp} onPointerCancel={onUp} onPointerLeave={() => { if (!dragging) setHover(null); }}>
+          <div className="tl-ruler" aria-hidden="true">
+            {ticks.minors.map((t) => <span key={`m${t}`} className="tick minor" style={{ left: `${pct(t)}%` }} />)}
+            {ticks.majors.map((t) => (
+              <span key={`M${t}`} className="tick major" style={{ left: `${pct(t)}%` }}>
+                <span className="tick-label" data-edge={t === 0 ? "start" : t >= duration ? "end" : undefined}>{tickLabel(t)}</span>
+              </span>
             ))}
-            <div className="played" style={{ width: `${pct(time)}%` }} />
+            {hover !== null && canPlay && (
+              <span className="tl-badge" style={{ left: badgeLeft }}>{fmtTime(hover)} · f{frameOf(hover)}</span>
+            )}
           </div>
-          {hover !== null && !dragging && <span className="hover-line" style={{ left: `${pct(hover)}%` }} />}
-          <div className="playhead" style={{ left: `${pct(time)}%` }}><span className="playhead-knob" /></div>
-          {shown !== null && canPlay && (
-            <div className="time-tip" style={{ left: `clamp(34px, ${pct(shown)}%, calc(100% - 34px))` }}>
-              <strong>{fmtTime(shown)}</strong>
-              <span>frame {frameOf(shown)}</span>
-            </div>
-          )}
+
+          <CaptionLane clips={audio?.clips} duration={duration} pct={pct} activeId={editing?.id} off={!showCaptions}
+            onOpen={onEditCaption ? (c, rect) => { onScrub(c.start); setEditing({ id: c.id, rect }); } : undefined} />
+
+          <div className="tl-track video">
+            {clips.map((c, i) => (
+              <div key={i} className="tl-clip" title={`${c.title} · ${fmtTime(c.start)} to ${fmtTime(c.end)}`}
+                style={{ left: `${pct(c.start)}%`, width: `${pct(c.end) - pct(c.start)}%` }}>
+                <span className="clip-title">{c.title}</span>
+                <span className="clip-dur">{(c.end - c.start).toFixed(1)}s</span>
+              </div>
+            ))}
+          </div>
+          <AudioLane kind="narration" clips={audio?.clips} job={audioJob} duration={duration} pct={pct} onAdd={onAddAudio} off={narrationMuted} />
+          <AudioLane kind="sfx" clips={audio?.clips} job={audioJob} duration={duration} pct={pct} onAdd={onAddAudio} off={sfxMuted} />
+
+          {hover !== null && !dragging && canPlay && <span className="tl-hover" style={{ left: `${pct(hover)}%` }} />}
+          <div className="tl-playhead" style={{ left: `${pct(time)}%` }}><span className="tl-head" /></div>
         </div>
       </div>
 
-      <span className="time muted total" title={`${totalFrames} frames at ${fps} fps`}>{fmtTime(duration)}</span>
+      {editing && onEditCaption && onRevoiceCaption && (() => {
+        const clip = audio?.clips.find((c) => c.id === editing.id);
+        if (!clip) return null;
+        const lines = audio!.clips.filter((c) => c.kind === "narration");
+        const next = lines[lines.findIndex((c) => c.id === clip.id) + 1];
+        return (
+          <CaptionEditor key={clip.id} clip={clip} nextStart={next?.start} duration={duration} fps={fps} rect={editing.rect}
+            playhead={() => bridge.getTime()} onClose={() => setEditing(null)}
+            onSave={(patch) => { onEditCaption(clip.id, patch); setEditing(null); }}
+            onRevoice={async (text, start) => { await onRevoiceCaption(clip.id, text, start); setEditing(null); }} />
+        );
+      })()}
     </div>
   );
 }
 
-// The current time as a button; click it to type an exact time to jump to.
-function Timecode({ time, fps, disabled, onCommit }: { time: number; fps: number; disabled: boolean; onCommit: (s: string) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState("");
-  const input = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { if (editing) input.current?.select(); }, [editing]);
-
-  // Removing the input can fire a blur, so make sure we only finish once.
-  const done = useRef(false);
-  useEffect(() => { if (editing) done.current = false; }, [editing]);
-  const finish = (commit: boolean) => {
-    if (done.current) return;
-    done.current = true;
-    if (commit) onCommit(text);
-    setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <input ref={input} className="timecode editing" value={text} aria-label="Jump to time" placeholder="e.g. 3.5, 1:02, f90"
-        onChange={(e) => setText(e.target.value)} onBlur={() => finish(true)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); finish(true); }
-          if (e.key === "Escape") { e.preventDefault(); finish(false); }
-          e.stopPropagation();
-        }} />
-    );
+// Captions are the narration lines, so each caption spans exactly the time its voice clip plays.
+function CaptionLane({ clips, duration, pct, activeId, onOpen, off }: {
+  clips?: AudioClip[]; duration: number; pct: (t: number) => number; activeId?: string; off?: boolean;
+  onOpen?: (c: AudioClip, rect: DOMRect) => void;
+}) {
+  const lines = (clips ?? []).filter((c) => c.kind === "narration" && c.start < duration);
+  if (!lines.length) {
+    return <div className="tl-track dim"><span className="lane-note">No captions · they come from the narration</span></div>;
   }
   return (
-    <button type="button" className="timecode" disabled={disabled} title="Click to jump to an exact time"
-      onClick={() => { setText(time.toFixed(2).replace(/\.?0+$/, "")); setEditing(true); }}>
-      <span className="tc-time">{fmtTime(time)}</span>
-      <span className="tc-frame">f{Math.round(time * fps)}</span>
-    </button>
+    <div className={`tl-track captions ${off ? "off" : ""}`}>
+      {lines.map((c, i) => {
+        const end = Math.min(duration, c.start + c.duration);
+        const overlaps = !!lines[i + 1] && lines[i + 1].start < c.start + c.duration - 0.02;
+        const edited = c.caption !== undefined && c.caption !== c.text;
+        const problems = [
+          overlaps && "Overlaps the next line, so the two voices will talk over each other.",
+          c.start + c.duration > duration + 0.05 && "Runs past the end of the video and will be cut off.",
+          edited && `The voice still says: "${c.text}". Re-voice this line to match.`,
+        ].filter(Boolean);
+        return (
+          <button key={c.id} type="button"
+            className={`tl-caption ${activeId === c.id ? "active" : ""} ${problems.length ? "warn" : ""}`}
+            style={{ left: `${pct(c.start)}%`, width: `${Math.max(0.4, pct(end) - pct(c.start))}%` }}
+            title={`${fmtTime(c.start)}–${fmtTime(c.start + c.duration)} · ${c.caption ?? c.text}${problems.length ? "\n\n" + problems.join("\n") : ""}\n\nClick to edit`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => onOpen?.(c, e.currentTarget.getBoundingClientRect())} disabled={!onOpen}>
+            <span className="caption-text">{c.caption ?? c.text}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// A small popover for one caption: its text and start time. Moving it moves the voice too.
+function CaptionEditor({ clip, nextStart, duration, fps, rect, playhead, onClose, onSave, onRevoice }: {
+  clip: AudioClip; nextStart?: number; duration: number; fps: number; rect: DOMRect; playhead: () => number;
+  onClose: () => void; onSave: (patch: { caption: string; start: number }) => void; onRevoice: (text: string, start: number) => Promise<void>;
+}) {
+  const [text, setText] = useState(clip.caption ?? clip.text);
+  const [start, setStart] = useState(clip.start.toFixed(2));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+    const onDown = (e: globalThis.PointerEvent) => { if (!busy && !box.current?.contains(e.target as Node)) onClose(); };
+    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape" && !busy) onClose(); };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("pointerdown", onDown); document.removeEventListener("keydown", onKey); };
+  }, [busy, onClose]);
+
+  const startNum = Number(start);
+  const validStart = Number.isFinite(startNum) && startNum >= 0 && startNum < duration;
+  const s = validStart ? startNum : clip.start;
+  const end = s + clip.duration;
+  const changedWords = text.trim() !== clip.text.trim();
+  const overlaps = nextStart !== undefined && end > nextStart + 0.02 && s < nextStart;
+  const pastEnd = end > duration + 0.05;
+
+  const nudge = (frames: number) => setStart(Math.min(duration, Math.max(0, s + frames / fps)).toFixed(2));
+  const revoice = async () => {
+    setBusy(true);
+    setError(null);
+    try { await onRevoice(text, s); } catch (err: any) { setError(err?.message || String(err)); setBusy(false); }
+  };
+
+  // Open below the caption, kept on screen.
+  const width = 340;
+  const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
+  const below = rect.bottom + 8;
+  const style: React.CSSProperties = below + 300 > window.innerHeight
+    ? { left, width, bottom: window.innerHeight - rect.top + 8 }
+    : { left, width, top: below };
+
+  return (
+    <div ref={box} className="caption-editor" style={style} role="dialog" aria-label="Edit caption">
+      <label className="ce-label" htmlFor="ceText">Caption</label>
+      <textarea id="ceText" ref={field} value={text} rows={3} disabled={busy}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (changedWords) void revoice(); else onSave({ caption: text, start: s }); }
+        }} />
+
+      <div className="ce-timing">
+        <label className="ce-label" htmlFor="ceStart">Starts at</label>
+        <div className="ce-time">
+          <button type="button" className="icon-btn" onClick={() => nudge(-1)} disabled={busy} aria-label="One frame earlier" title="One frame earlier">‹</button>
+          <input id="ceStart" value={start} inputMode="decimal" disabled={busy} aria-invalid={!validStart}
+            onChange={(e) => setStart(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+          <span className="muted">s</span>
+          <button type="button" className="icon-btn" onClick={() => nudge(1)} disabled={busy} aria-label="One frame later" title="One frame later">›</button>
+          <button type="button" className="btn small ghost" disabled={busy} onClick={() => setStart(playhead().toFixed(2))} title="Start this line where the playhead is">At playhead</button>
+        </div>
+        <p className="ce-meta">
+          Voice plays {fmtTime(s)} to {fmtTime(end)} ({clip.duration.toFixed(1)}s).
+          {overlaps && <span className="ce-warn"> Overlaps the next line at {fmtTime(nextStart!)}.</span>}
+          {pastEnd && <span className="ce-warn"> Runs past the end of the video.</span>}
+        </p>
+      </div>
+
+      {changedWords && (
+        <p className="ce-note">The voice says something different. <strong>Re-voice</strong> reads your new caption aloud so they match; its length may change.</p>
+      )}
+      {error && <p className="ce-error" role="alert">{error}</p>}
+
+      <div className="ce-actions">
+        <button type="button" className="btn small ghost" onClick={onClose} disabled={busy}>Cancel</button>
+        <span className="spacer" />
+        <button type="button" className={`btn small ${changedWords ? "ghost" : "primary"}`} disabled={busy || !validStart || !text.trim()}
+          onClick={() => onSave({ caption: text, start: s })} title={changedWords ? "Keep the current voice and only change the caption" : undefined}>
+          {changedWords ? "Caption only" : "Save"}
+        </button>
+        {changedWords && (
+          <button type="button" className="btn small primary" disabled={busy || !validStart || !text.trim()} onClick={revoice}>
+            {busy ? "Re-voicing…" : "Save & re-voice"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// One audio lane. Clips stack into rows when they overlap, so short effects stay visible.
+function AudioLane({ kind, clips, job, duration, pct, onAdd, off }: {
+  kind: ClipKind; clips?: AudioClip[]; job?: AudioJob; duration: number; pct: (t: number) => number; onAdd?: () => void; off?: boolean;
+}) {
+  const mine = (clips ?? []).filter((c) => c.kind === kind && c.start < duration);
+  const busy = job && (job.stage === "planning" || job.stage === "generating");
+  if (!mine.length) {
+    const name = kind === "narration" ? "No narration" : "No sound effects";
+    return (
+      <div className={`tl-track dim ${busy ? "generating" : ""}`}>
+        <span className="lane-note">
+          {busy ? (job.stage === "planning" ? "Planning audio…" : `Generating audio · ${job.done} of ${job.total}`) : name}
+          {!busy && onAdd && !clips?.length && (
+            <button type="button" className="lane-add" onPointerDown={(e) => e.stopPropagation()} onClick={onAdd}>Add narration &amp; sound</button>
+          )}
+        </span>
+      </div>
+    );
+  }
+  // Greedy row packing: put each clip in the first row where it doesn't overlap.
+  const rowEnds: number[] = [];
+  const placed = mine.map((c) => {
+    const end = Math.min(duration, c.start + c.duration);
+    let row = rowEnds.findIndex((e) => e <= c.start + 0.01);
+    if (row === -1) { row = rowEnds.length; rowEnds.push(end); } else rowEnds[row] = end;
+    return { c, end, row };
+  });
+  const rows = Math.min(2, rowEnds.length);
+  return (
+    <div className={`tl-track audio ${kind} ${off ? "off" : ""} ${busy ? "dim generating" : ""}`} style={{ "--rows": rows } as React.CSSProperties}>
+      {placed.map(({ c, end, row }) => (
+        <div key={c.id} className="tl-aclip" title={`${fmtTime(c.start)} · ${c.text}`}
+          style={{ left: `${pct(c.start)}%`, width: `${Math.max(0.4, pct(end) - pct(c.start))}%`, "--row": Math.min(row, rows - 1) } as React.CSSProperties}>
+          <span className="aclip-text">{c.text}</span>
+        </div>
+      ))}
+    </div>
   );
 }

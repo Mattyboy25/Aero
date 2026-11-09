@@ -7,14 +7,15 @@ import {
   SCENE_PROMPT,
 } from "./prompt.mjs";
 import { streamMessage } from "./models.mjs";
+import { narrationBlock } from "./narration.mjs";
 
 const SCENE_MODEL = "claude-haiku-5-5";
 const MAX_SCENES = 6;
 const SCENE_ATTEMPTS = 2;
 
-export async function runTeam({ client, prompt, settings, model, effort, send, signal }) {
+export async function runTeam({ client, prompt, settings, narration, model, effort, send, signal }) {
   send({ type: "phase", phase: "planning" });
-  const plan = await direct({ client, prompt, settings, model, effort, send, signal });
+  const plan = await direct({ client, prompt, settings, narration, model, effort, send, signal });
 
   send({
     type: "plan",
@@ -25,7 +26,7 @@ export async function runTeam({ client, prompt, settings, model, effort, send, s
 
   const codes = await Promise.all(
     plan.scenes.map((scene, index) =>
-      writeScene({ client, prompt, settings, plan, index, send, signal })
+      writeScene({ client, prompt, settings, narration, plan, index, send, signal })
     )
   );
 
@@ -34,10 +35,11 @@ export async function runTeam({ client, prompt, settings, model, effort, send, s
 
 // ---------- director (the chosen model) ----------
 
-async function direct({ client, prompt, settings, model, effort, send, signal }) {
+async function direct({ client, prompt, settings, narration, model, effort, send, signal }) {
   const { width, height, duration, fps } = settings;
   const content = [
     `Video settings: ${width}x${height} pixels, DURATION = ${duration} seconds, ${fps} fps.`,
+    narration ? narrationBlock(narration, duration) : "",
     `<request>\n${prompt}\n</request>`,
   ].filter(Boolean).join("\n\n");
 
@@ -108,7 +110,7 @@ function normalizeScenes(scenes, duration) {
 
 // ---------- scene animators (Haiku, in parallel) ----------
 
-async function writeScene({ client, prompt, settings, plan, index, send, signal }) {
+async function writeScene({ client, prompt, settings, narration, plan, index, send, signal }) {
   const scene = plan.scenes[index];
   let previous = null;
 
@@ -121,7 +123,7 @@ async function writeScene({ client, prompt, settings, plan, index, send, signal 
           max_tokens: 32000,
           output_config: { effort: "medium" },
           system: [{ type: "text", text: SCENE_PROMPT, cache_control: { type: "ephemeral" } }],
-          messages: [{ role: "user", content: sceneMessage({ prompt, settings, plan, index, previous }) }],
+          messages: [{ role: "user", content: sceneMessage({ prompt, settings, narration, plan, index, previous }) }],
         },
         { signal }
       );
@@ -165,7 +167,7 @@ class SceneError extends Error {
   }
 }
 
-function sceneMessage({ prompt, settings, plan, index, previous }) {
+function sceneMessage({ prompt, settings, narration, plan, index, previous }) {
   const { width, height, duration, fps } = settings;
   const scene = plan.scenes[index];
   const next = plan.scenes[index + 1];
@@ -183,6 +185,7 @@ function sceneMessage({ prompt, settings, plan, index, previous }) {
     `<scene_list>\n${list}\n</scene_list>`,
     `<your_scene>\nScene ${index + 1} of ${plan.scenes.length}: "${scene.title}". SCENE_DURATION = ${round(scene.end - scene.start)} seconds. Entering: ${enter}. Leaving: ${exit}.\n\n${scene.brief}\n</your_scene>`,
   ];
+  if (narration) parts.push(narrationBlock(narration, duration, { from: scene.start, to: scene.end }));
   if (previous) {
     parts.push(
       `<previous_attempt>\nYour previous attempt ${previous.reason}. Write the scene again and fix that.` +
