@@ -1,0 +1,288 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// Runs AI-generated animation code. Loaded in an iframe with sandbox="allow-scripts"
+// (opaque origin), so the code can't touch the parent page.
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const post = (msg, transfer) => parent.postMessage(msg, "*", transfer || []);
+
+  // ---------- helpers exposed to programs ----------
+  const TAU = Math.PI * 2;
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+  const map = (x, a, b, c, d) => c + ((x - a) / (b - a)) * (d - c);
+  const progress = (t, s, e) => clamp((t - s) / (e - s), 0, 1);
+  const hsl = (h, s, l, a = 1) => `hsla(${h}, ${s}%, ${l}%, ${a})`;
+  const c1 = 1.70158, c2 = c1 * 1.525, c3 = c1 + 1;
+  const ease = {
+    linear: x => x,
+    inQuad: x => x * x, outQuad: x => 1 - (1 - x) * (1 - x),
+    inOutQuad: x => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2,
+    inCubic: x => x * x * x, outCubic: x => 1 - Math.pow(1 - x, 3),
+    inOutCubic: x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2,
+    inQuart: x => x ** 4, outQuart: x => 1 - Math.pow(1 - x, 4),
+    inOutQuart: x => x < 0.5 ? 8 * x ** 4 : 1 - Math.pow(-2 * x + 2, 4) / 2,
+    inExpo: x => x === 0 ? 0 : Math.pow(2, 10 * x - 10),
+    outExpo: x => x === 1 ? 1 : 1 - Math.pow(2, -10 * x),
+    inOutExpo: x => x === 0 ? 0 : x === 1 ? 1 : x < 0.5 ? Math.pow(2, 20 * x - 10) / 2 : (2 - Math.pow(2, -20 * x + 10)) / 2,
+    inSine: x => 1 - Math.cos((x * Math.PI) / 2), outSine: x => Math.sin((x * Math.PI) / 2),
+    inOutSine: x => -(Math.cos(Math.PI * x) - 1) / 2,
+    outBack: x => 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2),
+    inOutBack: x => x < 0.5
+      ? (Math.pow(2 * x, 2) * ((c2 + 1) * 2 * x - c2)) / 2
+      : (Math.pow(2 * x - 2, 2) * ((c2 + 1) * (x * 2 - 2) + c2) + 2) / 2,
+    outElastic: x => x === 0 ? 0 : x === 1 ? 1 : Math.pow(2, -10 * x) * Math.sin((x * 10 - 0.75) * (TAU / 3)) + 1,
+    outBounce: x => {
+      const n = 7.5625, d = 2.75;
+      if (x < 1 / d) return n * x * x;
+      if (x < 2 / d) return n * (x -= 1.5 / d) * x + 0.75;
+      if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + 0.9375;
+      return n * (x -= 2.625 / d) * x + 0.984375;
+    },
+  };
+  function random(seed = 1) {
+    let a = (seed * 2654435761) >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function hash3(x, y, z) {
+    let h = (x * 374761393 + y * 668265263 + z * 1274126177) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+  }
+  function noise(x, y = 0, z = 0) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const fx = x - xi, fy = y - yi, fz = z - zi;
+    const s = v => v * v * (3 - 2 * v);
+    const u = s(fx), v = s(fy), w = s(fz);
+    const n = (i, j, k) => hash3(xi + i, yi + j, zi + k);
+    const x00 = lerp(n(0,0,0), n(1,0,0), u), x10 = lerp(n(0,1,0), n(1,1,0), u);
+    const x01 = lerp(n(0,0,1), n(1,0,1), u), x11 = lerp(n(0,1,1), n(1,1,1), u);
+    return lerp(lerp(x00, x10, v), lerp(x01, x11, v), w) * 2 - 1;
+  }
+
+  // ---------- program lifecycle ----------
+  let program = null;
+  let cfg = { W: 1920, H: 1080, DURATION: 8, FPS: 30 };
+  let time = 0, playing = false, lastTs = 0, failed = false;
+
+  // ---------- cinematic helpers ----------
+  const unit = () => Math.min(cfg.W, cfg.H) / 1000;
+
+  // Moves a virtual camera: world point (x, y) lands at the frame center, scaled by zoom.
+  function camera(c, { x = cfg.W / 2, y = cfg.H / 2, zoom = 1, rotation = 0 } = {}) {
+    c.translate(cfg.W / 2, cfg.H / 2);
+    c.rotate(rotation);
+    c.scale(zoom, zoom);
+    c.translate(-x, -y);
+  }
+
+  // Blur radius in pixels for an object at `depth` when the lens focuses at `focus`.
+  function depthBlur(depth, focus, amount = 1) {
+    return Math.abs(depth - focus) * amount * unit() * 10;
+  }
+
+  // Named full-frame offscreen layers, cleared on every call. Draw a depth plane into one,
+  // then composite() it with a single blur, which is far cheaper than blurring each shape.
+  const layers = new Map();
+  function layer(name = "default") {
+    let l = layers.get(name);
+    if (!l || l.canvas.width !== cfg.W || l.canvas.height !== cfg.H) {
+      l = new OffscreenCanvas(cfg.W, cfg.H).getContext("2d");
+      layers.set(name, l);
+    }
+    resetCtx(l);
+    return l;
+  }
+
+  function composite(c, src, { blur = 0, alpha = 1, mode = "source-over" } = {}) {
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalAlpha = alpha;
+    c.globalCompositeOperation = mode;
+    if (blur > 0.3) c.filter = `blur(${blur}px)`;
+    c.drawImage(src.canvas || src, 0, 0);
+    c.restore();
+  }
+
+  // Averages several sub-frame renders across the shutter interval. renderFn(c, t) must draw a full frame.
+  function motionBlur(c, t, renderFn, { samples = 4, shutter = 0.5 } = {}) {
+    const n = Math.max(1, Math.min(8, Math.round(samples)));
+    const span = shutter / cfg.FPS;
+    for (let i = 0; i < n; i++) {
+      const st = t + (n === 1 ? 0 : (i / (n - 1) - 0.5) * span);
+      const l = layer("__motion");
+      renderFn(l, st);
+      composite(c, l, { alpha: 1 / (i + 1) });
+    }
+  }
+
+  function vignette(c, strength = 0.5) {
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    const r = Math.hypot(cfg.W, cfg.H) / 2;
+    const g = c.createRadialGradient(cfg.W / 2, cfg.H / 2, r * 0.35, cfg.W / 2, cfg.H / 2, r);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, `rgba(0,0,0,${strength})`);
+    c.fillStyle = g;
+    c.fillRect(0, 0, cfg.W, cfg.H);
+    c.restore();
+  }
+
+  let grainTiles = null;
+  function grain(c, t, amount = 0.06) {
+    if (!grainTiles) {
+      const r = random(99);
+      grainTiles = Array.from({ length: 4 }, () => {
+        const cv = new OffscreenCanvas(256, 256);
+        const g = cv.getContext("2d");
+        const img = g.createImageData(256, 256);
+        for (let i = 0; i < img.data.length; i += 4) {
+          const v = r() * 255;
+          img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+          img.data[i + 3] = 255;
+        }
+        g.putImageData(img, 0, 0);
+        return cv;
+      });
+    }
+    const f = Math.floor(t * cfg.FPS);
+    const tile = grainTiles[((f % 4) + 4) % 4];
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalAlpha = amount;
+    c.globalCompositeOperation = "overlay";
+    c.fillStyle = c.createPattern(tile, "repeat");
+    c.fillRect(0, 0, cfg.W, cfg.H);
+    c.restore();
+  }
+
+  // Black bars for a widescreen look. k (0..1) animates them in.
+  function letterbox(c, ratio = 2.39, k = 1) {
+    const bar = ((cfg.H - cfg.W / ratio) / 2) * k;
+    if (bar <= 0) return;
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.fillStyle = "#000";
+    c.fillRect(0, 0, cfg.W, bar);
+    c.fillRect(0, cfg.H - bar, cfg.W, bar);
+    c.restore();
+  }
+
+  function compile(code) {
+    const helpers = { W: cfg.W, H: cfg.H, DURATION: cfg.DURATION, FPS: cfg.FPS, TAU, lerp, clamp, map, progress, ease, random, noise, hsl,
+      camera, depthBlur, layer, composite, motionBlur, vignette, grain, letterbox };
+    const names = Object.keys(helpers);
+    const factory = new Function(...names,
+      code + "\n;return { setup: typeof setup === 'function' ? setup : null, draw: typeof draw === 'function' ? draw : null };");
+    const p = factory(...names.map((k) => helpers[k]));
+    if (!p.draw) throw new Error("The program must define function draw(ctx, t).");
+    return p;
+  }
+
+  function resetCtx(c) {
+    if (c.reset) { c.reset(); return; }
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalAlpha = 1; c.globalCompositeOperation = "source-over";
+    c.filter = "none"; c.shadowBlur = 0; c.shadowColor = "transparent";
+    c.lineWidth = 1; c.setLineDash([]);
+    c.clearRect(0, 0, c.canvas.width, c.canvas.height);
+  }
+  const resetContext = () => resetCtx(ctx);
+
+  function render(t) {
+    if (!program || failed) return false;
+    resetContext();
+    try {
+      program.draw(ctx, t);
+      return true;
+    } catch (err) {
+      fail(err, t);
+      return false;
+    }
+  }
+
+  function fail(err, t) {
+    failed = true;
+    playing = false;
+    const where = typeof t === "number" ? ` (at t=${t.toFixed(2)}s)` : "";
+    post({ type: "error", message: `${err && err.name ? err.name + ": " : ""}${err && err.message ? err.message : err}${where}` });
+  }
+
+  function tick(ts) {
+    if (!playing) return;
+    const dt = lastTs ? (ts - lastTs) / 1000 : 0;
+    lastTs = ts;
+    time = (time + dt) % cfg.DURATION;
+    render(time);
+    post({ type: "time", t: time });
+    requestAnimationFrame(tick);
+  }
+
+  window.addEventListener("message", async (e) => {
+    const m = e.data || {};
+    switch (m.type) {
+      case "hello":
+        post({ type: "booted" });
+        break;
+      case "load": {
+        playing = false; failed = false; program = null;
+        cfg = { W: m.W, H: m.H, DURATION: m.DURATION, FPS: m.FPS };
+        canvas.width = cfg.W; canvas.height = cfg.H;
+        time = Math.min(m.t || 0, cfg.DURATION);
+        try {
+          program = compile(m.code);
+          if (program.setup) program.setup();
+        } catch (err) { fail(err); return; }
+        // Render a few frames across the whole video so errors in later scenes surface now.
+        for (let k = 1; k < 8 && !failed; k++) render((cfg.DURATION * k) / 8);
+        if (failed) return;
+        if (render(time)) post({ type: "ready" });
+        if (m.autoplay && !failed) { playing = true; lastTs = 0; requestAnimationFrame(tick); }
+        break;
+      }
+      case "play":
+        if (!program || failed || playing) return;
+        playing = true; lastTs = 0; requestAnimationFrame(tick);
+        break;
+      case "pause":
+        playing = false;
+        break;
+      case "seek":
+        time = clamp(m.t, 0, cfg.DURATION);
+        render(time);
+        break;
+      case "frame": {
+        // Export: render exactly time t and hand the pixels back to the parent.
+        playing = false;
+        const ok = render(m.t);
+        if (!ok) { post({ type: "frame", id: m.id, failed: true }); return; }
+        const bitmap = await createImageBitmap(canvas);
+        post({ type: "frame", id: m.id, bitmap }, [bitmap]);
+        break;
+      }
+    }
+  });
+
+  window.addEventListener("error", (e) => fail(e.error || e.message));
+  post({ type: "booted" });
+})();
+</script>
+</body>
+</html>
