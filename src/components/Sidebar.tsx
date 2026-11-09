@@ -1,4 +1,5 @@
 import type { Project, Theme } from "../types";
+import { Logo } from "./Logo";
 import { IconFilm, IconMonitor, IconMoon, IconPlus, IconSidebar, IconSun, IconTrash } from "./Icons";
 
 interface Props {
@@ -39,7 +40,7 @@ export function Sidebar(props: Props) {
       <aside className={`sidebar ${open ? "open" : "collapsed"}`} aria-label="Projects">
         <div className="sidebar-head">
           <div className="brand">
-            <span className="logo" aria-hidden="true" />
+            <Logo className="logo" />
             <span className="brand-name">Aero</span>
           </div>
           <button type="button" className="icon-btn" onClick={onToggle}
