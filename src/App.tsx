@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AssistantTurn, AudioClip, AudioJob, Effort, ModelKey, Overlay, Project, Settings, Aspect } from "./types";
+import type { AssistantTurn, Attachment, AudioClip, AudioJob, Effort, ModelKey, Overlay, Project, Settings, Aspect } from "./types";
 import { ASPECTS, DURATIONS, FPS_OPTIONS, MAX_DURATIONS, MODEL_INFO, dims, fmtTime, titleFrom, uid } from "./lib/constants";
 import { planLength } from "./lib/length";
+import { writePlan } from "./lib/plan";
+import { payload, planIntent } from "./lib/intent";
 import { load, newProject, readPref, save, writePref } from "./lib/storage";
-import { readEvents, splitResponse } from "./lib/stream";
+import { mergeContinuation, readEvents, splitResponse } from "./lib/stream";
 import { RuntimeBridge } from "./lib/runtime";
 import { exportMp4, ExportCancelled } from "./lib/exportMp4";
 import type { Slosh } from "./lib/slosh";
@@ -12,10 +14,12 @@ import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Preview } from "./components/Preview";
 import { CodePane } from "./components/CodePane";
+import { PlanPane } from "./components/PlanPane";
 import { ExportDialog, type ExportState } from "./components/ExportDialog";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { useUser } from "./lib/user";
 import { AudioEngine, blobIdOf, mixdown } from "./lib/audioEngine";
+import { MAX_ATTACHMENTS, MAX_IMAGES, fileKind, prepareFile } from "./lib/attachments";
 import { DEFAULT_UPLOAD_PROMPT, MAX_UPLOAD_BYTES, MAX_UPLOAD_SECONDS, clipsFromUpload, linesFromWords, looksLikeAudio, transcribe } from "./lib/upload";
 import { generateAudio, voiceLine } from "./lib/audioGen";
 import { deleteClips, putClip } from "./lib/audioStore";
@@ -25,6 +29,7 @@ import { Select } from "./components/Select";
 import { IconDownload, IconSidebar } from "./components/Icons";
 
 const IDLE_TEXT = "Your video will appear here";
+type Tab = "preview" | "plan" | "code";
 /** Requests that mean "I want captions": these are routed to the narration track. */
 const CAPTION_REQUEST = /\b(caption(?:s|ed|ing)?|subtitl(?:e|es|ed|ing)|closed[- ]?captions?|voice[- ]?overs?|narrat(?:e|ed|ion|or|ing)|transcripts?)\b/i;
 const codeOf = (p: Project) => p.versions[p.current]?.code ?? "";
@@ -72,7 +77,13 @@ export default function App() {
     setChatW(next);
     writePref("aero.chatW", String(next));
   };
-  const [tab, setTab] = useState<"preview" | "code">("preview");
+  const [tab, setTab] = useState<Tab>("preview");
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  // The tab the app switched to on its own while generating, so it can switch back afterwards
+  // (but not if the user picked another tab meanwhile).
+  const autoTab = useRef<Tab | null>(null);
+  const [livePlan, setLivePlan] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [liveCode, setLiveCode] = useState<string | null>(null);
   // Set once the model starts writing code, which is when a new video's chat slides over to reveal the workspace.
@@ -211,9 +222,49 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKey);
   }, [togglePlay]);
 
+  // ---------- attachments: images and video the agent looks at ----------
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachBusy, setAttachBusy] = useState<string | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+
+  // Everything the user picks, drops or pastes comes through here. Images and video become pictures
+  // for Claude to look at; an audio recording becomes the narration of a new video.
+  async function addFiles(files: File[]) {
+    if (!files.length || abortRef.current) return;
+    setAttachError(null);
+    for (const file of files) {
+      const kind = fileKind(file);
+      if (kind === "audio") {
+        if (projectRef.current.versions.length) { setAttachError("A narration recording can only be added when you start a new video."); continue; }
+        await attachAudio(file);
+        continue;
+      }
+      if (kind === "other") { setAttachError(`${file.name} isn't an image, video or audio file.`); continue; }
+      const have = attachmentsRef.current;
+      if (have.length >= MAX_ATTACHMENTS) { setAttachError(`You can attach up to ${MAX_ATTACHMENTS} images or videos to one message.`); break; }
+      setAttachBusy(kind === "video" ? `Looking through ${file.name}…` : `Reading ${file.name}…`);
+      try {
+        const a = await prepareFile(file);
+        const used = attachmentsRef.current.reduce((n, x) => n + x.images.length, 0);
+        if (used + a.images.length > MAX_IMAGES) { setAttachError("That's too many pictures for one message. Remove an attachment first."); continue; }
+        setAttachments((cur) => (cur.length >= MAX_ATTACHMENTS ? cur : [...cur, a]));
+        attachmentsRef.current = [...attachmentsRef.current, a];
+      } catch (err: any) {
+        setAttachError(err?.message || String(err));
+      } finally {
+        setAttachBusy(null);
+      }
+    }
+  }
+  const removeAttachment = (id: string) => setAttachments((cur) => cur.filter((a) => a.id !== id));
+
   // ---------- narration upload (new videos) ----------
   const [uploadJob, setUploadJob] = useState<{ pid: string; name: string; status: "decoding" | "transcribing" | "error"; error?: string } | null>(null);
   const uploadAbort = useRef<AbortController | null>(null);
+  // Files that went with a message that was cut off, in case it is continued. Too big to save with the chat.
+  const resumeAtts = useRef(new Map<string, Attachment[]>());
 
   // Reads the recording, has ElevenLabs transcribe it, and attaches it to the (still empty) video.
   async function attachAudio(file: File) {
@@ -282,33 +333,56 @@ export default function App() {
   };
 
   // ---------- generation ----------
-  async function generate({ prompt, error }: { prompt: string; error?: string }) {
+  // `resumeId`: the id of a reply that was cut off or stopped. It is continued in place, from the code
+  // already written, instead of starting a new message.
+  // `fromPlan`: build straight from the plan in the Plan tab (`planText`), skipping the chat steps and
+  // the plan step: the user has already written or edited the plan.
+  async function generate(args: { prompt: string; error?: string; resumeId?: string; fromPlan?: boolean; planText?: string }) {
+    const { prompt, resumeId, fromPlan } = args;
     if (abortRef.current) return;
     // Generating needs the user's own Anthropic key; send them to add one.
     const anthropicKey = apiKeys.get("anthropic");
     if (!anthropicKey) { setSettingsTab("api"); setSettingsOpen(true); return; }
     const p = projectRef.current;
     const pid = p.id;
-    const startCode = codeOf(p);
+    const prior = resumeId ? p.turns.find((t): t is AssistantTurn => t.role === "assistant" && t.id === resumeId) : undefined;
+    const cut = prior?.cutoff;
+    if (resumeId && !cut) return;
+    // Continuing works on the same code, request and settings the cut-off reply had.
+    const error = cut ? cut.error : args.error;
+    const startCode = cut ? (cut.baseVersion >= 0 ? p.versions[cut.baseVersion]?.code ?? "" : "") : codeOf(p);
+    const baseVersion = cut ? cut.baseVersion : startCode ? p.current : -1;
     const userText = error ? "Fix the error in the current version." : prompt;
+    // Files waiting in the composer go with this message, then the composer is empty again.
+    const atts = cut ? (resumeAtts.current.get(resumeId!) ?? []) : error ? [] : attachmentsRef.current;
+    if (!cut && atts.length) { setAttachments([]); attachmentsRef.current = []; }
+    setAttachError(null);
     const isFirst = p.versions.length === 0;
     // Team mode builds new videos; edits and fixes go to the chosen model alone.
-    const useTeam = p.settings.mode === "team" && !startCode && !error;
+    const useTeam = !cut && p.settings.mode === "team" && !startCode && !error;
 
-    const turn: AssistantTurn = { id: uid(), role: "assistant", text: "", thinking: "", pending: true, phase: "thinking" };
-    if (p.settings.mode === "team" && !useTeam) turn.note = `Edits go to ${MODEL_INFO[model].name} directly, so it can see the whole video.`;
-    if (useTeam) turn.team = { phase: "planning", scenes: [] };
-    updateProject(pid, (q) => ({
-      ...q,
-      turns: [...q.turns, { id: uid(), role: "user", text: userText }, { ...turn }],
-    }));
+    const turn: AssistantTurn = cut
+      ? { ...prior!, error: undefined, note: undefined, pending: true, phase: "coding" }
+      : { id: uid(), role: "assistant", text: "", thinking: "", pending: true, phase: "thinking" };
+    if (cut) {
+      updateProject(pid, (q) => ({ ...q, turns: q.turns.map((t) => (t.id === turn.id ? { ...turn } : t)) }));
+    } else {
+      // A new message answers (or moves past) any questions still open.
+      updateProject(pid, (q) => ({
+        ...q,
+        turns: [
+          ...q.turns.map((t) => (t.role === "assistant" && t.questions && !t.answered ? { ...t, answered: true } : t)),
+          { id: uid(), role: "user", text: userText, ...(atts.length ? { attachments: atts.map(({ kind, name, thumb }) => ({ kind, name, thumb })) } : {}) },
+          { ...turn },
+        ],
+      }));
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
     setGenerating(true);
-    setLiveCode(null);
-    setCodingStarted(false);
-    setOverlay(useTeam ? `${MODEL_INFO[model].name} is planning the shots…` : isFirst ? "Claude is thinking…" : "Claude is editing…", true);
+    setLiveCode(cut ? splitResponse(cut.raw).code || null : null);
+    setCodingStarted(!!cut);
 
     // Stream events arrive faster than the screen refreshes, so push the turn to React once per frame.
     let raf = 0;
@@ -320,16 +394,42 @@ export default function App() {
     const schedule = () => { if (!raf) raf = requestAnimationFrame(flush); };
 
     const [width, height] = dims(p.settings);
-    let raw = "";
+    let raw = cut ? cut.raw : "";
     let stopReason: string | null = null;
+    // When continuing: the code written so far (as the server trimmed it), and what has arrived since.
+    let resumeBase: string | null = null;
+    let cont = "";
+    let request = cut ? cut.request : prompt;
+    // The plan the code is written from, and the part of a new plan written so far (kept if stopped).
+    let plan = "";
+    let planDraft = "";
 
     try {
+      // First work out what the message means. Greetings and questions get a reply, vague requests
+      // get a few questions, and only a real request goes on to the animator, as a full brief.
+      const uploadStart = isFirst && !!p.upload && prompt === DEFAULT_UPLOAD_PROMPT;
+      if (!error && !uploadStart && !cut && !fromPlan) {
+        const intent = await planIntent({ message: prompt, turns: p.turns, code: startCode, settings: p.settings, model, key: anthropicKey, signal: controller.signal, attachments: atts });
+        if (intent.action === "reply") { turn.text = intent.message; return; }
+        if (intent.action === "ask") {
+          turn.text = intent.message; turn.questions = intent.questions;
+          // The answers are what builds the video, so the files stay in the composer to go with them.
+          if (atts.length) { setAttachments((cur) => (cur.length ? cur : atts)); attachmentsRef.current = atts; }
+          return;
+        }
+        request = intent.brief;
+      }
+      if (p.settings.mode === "team" && !useTeam && !cut) turn.note = `Edits go to ${MODEL_INFO[model].name} directly, so it can see the whole video.`;
+      if (useTeam) turn.team = { phase: "planning", scenes: [] };
+      schedule();
+      setOverlay(useTeam ? `${MODEL_INFO[model].name} is planning the shots…` : cut ? "Claude is picking up where it left off…" : isFirst ? "Claude is thinking…" : "Claude is editing…", true);
+
       // Auto length: Claude picks how long the video is (within the max) before it is written.
       // An uploaded recording already sets the length, so it skips this.
       let duration = p.settings.duration;
-      if (p.settings.auto && !p.upload && !error) {
+      if (p.settings.auto && !p.upload && !error && !cut && !fromPlan) {
         setOverlay("Choosing the length…", true);
-        const plan = await planLength({ prompt, current: p.versions.length ? durationOf(p) : undefined, max: p.settings.maxDuration, key: anthropicKey, signal: controller.signal });
+        const plan = await planLength({ prompt: request, current: p.versions.length ? durationOf(p) : undefined, max: p.settings.maxDuration, key: anthropicKey, signal: controller.signal });
         if (plan) {
           duration = plan.seconds;
           turn.note = `${turn.note ? turn.note + " " : ""}Auto length: ${duration}s (max ${p.settings.maxDuration}s).`;
@@ -337,17 +437,48 @@ export default function App() {
           schedule();
         }
       }
+      // The plan step: before any code, Claude writes the plan out in the Plan tab, where it can be
+      // read and edited. The code step then implements it instead of planning in hidden thinking.
+      // A runtime-error fix skips it (the plan hasn't changed), and so does continuing a cut-off reply.
+      plan = fromPlan ? (args.planText ?? p.plan ?? "") : (p.plan ?? "");
+      if (!error && !cut && !fromPlan) {
+        turn.phase = "planning";
+        schedule();
+        setOverlay(p.plan ? "Claude is updating the plan…" : "Claude is planning the video…", true);
+        setCodingStarted(true); // a new video's workspace slides in, so the plan can be watched
+        if (tabRef.current !== "plan") { autoTab.current = "plan"; setTab("plan"); pause(); }
+        setLivePlan("");
+        plan = await writePlan({
+          request, effort, model, key: anthropicKey, signal: controller.signal,
+          settings: { width, height, duration, fps: p.settings.fps, animation: p.settings.animation },
+          narration: p.upload ? { lines: p.upload.lines } : undefined,
+          attachments: payload(atts), currentPlan: p.plan, currentCode: startCode,
+          onText: (text) => { planDraft = text; setLivePlan(text); },
+        });
+        planDraft = "";
+        updateProject(pid, (q) => ({ ...q, plan }));
+        setLivePlan(null);
+        turn.phase = "coding";
+        schedule();
+        setOverlay(isFirst ? "Claude is writing the code…" : "Claude is editing…", true);
+      } else if (fromPlan) {
+        updateProject(pid, (q) => ({ ...q, plan }));
+        setCodingStarted(true);
+      }
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json", [KEY_HEADERS.anthropic]: anthropicKey },
         body: JSON.stringify({
-          prompt: error ? "Fix the runtime error so the video plays correctly." : prompt,
+          plan: error ? undefined : plan || undefined,
+          prompt: error ? "Fix the runtime error so the video plays correctly." : request,
           narration: p.upload ? { lines: p.upload.lines } : undefined,
+          attachments: payload(atts),
           code: startCode,
           error: error || "",
           effort,
           model,
           mode: useTeam ? "team" : "solo",
+          resume: cut ? { text: cut.raw } : undefined,
           settings: { width, height, duration, fps: p.settings.fps, animation: p.settings.animation },
         }),
         signal: controller.signal,
@@ -361,8 +492,11 @@ export default function App() {
         if (event.type === "thinking") {
           turn.thinking += event.text;
           turn.phase = "thinking";
+        } else if (event.type === "base") {
+          resumeBase = event.text;
+          raw = event.text;
         } else if (event.type === "text") {
-          raw += event.text;
+          if (resumeBase !== null) { cont += event.text; raw = mergeContinuation(resumeBase, cont); } else raw += event.text;
           const { summary, code, inCode } = splitResponse(raw);
           turn.text = summary;
           turn.phase = inCode ? "coding" : "writing";
@@ -381,7 +515,8 @@ export default function App() {
           turn.phase = "thinking";
         } else if (event.type === "fallback") {
           // A fallback model restarts the answer, so drop the partial text.
-          raw = "";
+          raw = resumeBase ?? "";
+          cont = "";
           turn.note = `Answered by fallback model ${event.to || ""}`.trim();
         } else if (event.type === "phase" && turn.team) {
           turn.team.phase = event.phase;
@@ -406,12 +541,19 @@ export default function App() {
       }
 
       if (stopReason === "refusal") throw new Error("Claude declined this request. Try rephrasing it.");
+      if (resumeBase !== null) {
+        raw = mergeContinuation(resumeBase, cont, true);
+        // The model sometimes finishes the program but forgets to close the code block.
+        if (stopReason === "end_turn" && splitResponse(raw).code && !splitResponse(raw).complete) raw += "\n```";
+      }
       const { code, complete } = splitResponse(raw);
       if (!code || !complete) {
         throw new Error(stopReason === "max_tokens"
-          ? "The response was cut off before the code finished. Try a simpler request."
+          ? "The response was cut off before the code finished."
           : "Claude didn't return any code. Try rephrasing your request.");
       }
+      delete turn.cutoff;
+      resumeAtts.current.delete(turn.id);
 
       const latest = projectRef.current;
       // An uploaded recording is the video's narration: the first version gets its clips, and later
@@ -421,19 +563,22 @@ export default function App() {
         : undefined;
       const next: Project = {
         ...latest,
-        title: isFirst ? titleFrom(latest.upload && prompt === DEFAULT_UPLOAD_PROMPT ? latest.upload.name.replace(/\.[^.]+$/, "") : prompt) : latest.title,
-        versions: [...latest.versions, { code, prompt: userText, audio: upAudio, duration }],
+        title: isFirst ? titleFrom(latest.upload && prompt === DEFAULT_UPLOAD_PROMPT ? latest.upload.name.replace(/\.[^.]+$/, "") : request) : latest.title,
+        versions: [...latest.versions, { code, prompt: error ? userText : request, audio: upAudio, duration, plan: plan || latest.plan }],
         current: latest.versions.length,
       };
       turn.version = next.current;
       updateProject(pid, (q) => ({ ...q, title: next.title, versions: next.versions, current: next.current }));
+      if (autoTab.current && tabRef.current === autoTab.current) setTab("preview");
+      autoTab.current = null;
       setRuntimeError(null);
       engine.unlock();
       loadPreview(next, true, 0);
       // Captions only ever come from the narration track (the video code is told never to draw them),
       // so a request for captions or a voiceover always gets narration, even with auto audio off.
       const ap = audioPrefsRef.current;
-      const wantsCaptions = !error && CAPTION_REQUEST.test(prompt);
+      const wantsCaptions = !error && CAPTION_REQUEST.test(`${prompt}
+${request}`);
       // Hand over the new version directly: state won't include it until the next render.
       const snapshot: Project = { ...next, turns: next.turns.map((t) => (t.id === turn.id ? { ...turn } : t)) };
       if (latest.upload) {
@@ -445,6 +590,20 @@ export default function App() {
       } else if (ap.auto && (ap.narration || ap.sfx)) startAudio(pid, next.current, false, {}, snapshot);
     } catch (err: any) {
       turn.error = err?.name === "AbortError" ? "Stopped." : err?.message || String(err);
+      if (planDraft.trim()) {
+        const kept = planDraft;
+        updateProject(pid, (q) => ({ ...q, plan: kept }));
+        turn.note = "The plan written so far is kept in the Plan tab. Edit it if you like, then build the video from there.";
+      }
+      autoTab.current = null;
+      // Whatever code was written before the failure (a cut-off reply, a stop, a dropped connection)
+      // stays, so it can be continued instead of lost.
+      const written = splitResponse(raw);
+      if (written.code && !written.complete) {
+        turn.cutoff = { raw, request, error, baseVersion };
+        if (atts.length) resumeAtts.current.set(turn.id, atts);
+        switchTab("code");
+      }
       if (startCode) hideOverlay(true);
       else setOverlay(IDLE_TEXT, false);
     } finally {
@@ -454,10 +613,17 @@ export default function App() {
       abortRef.current = null;
       setGenerating(false);
       setLiveCode(null);
+      setLivePlan(null);
     }
   }
 
   const stop = () => abortRef.current?.abort();
+  const savePlan = useCallback((plan: string) => updateProject(projectRef.current.id, (q) => ({ ...q, plan })), [updateProject]);
+  const buildFromPlan = (plan: string) => generate({
+    prompt: projectRef.current.versions.length ? "Update the video to match the edited plan." : "Build the video from the plan.",
+    fromPlan: true, planText: plan,
+  });
+  const continueTurn = (turnId: string) => generate({ prompt: "", resumeId: turnId });
 
   // ---------- narration and sound effects ----------
   const jobKey = (pid: string, vi: number) => `${pid}:${vi}`;
@@ -575,6 +741,9 @@ export default function App() {
 
   // ---------- project actions ----------
   const openProject = (p: Project) => {
+    setAttachments([]);
+    attachmentsRef.current = [];
+    setAttachError(null);
     setActiveId(p.id);
     setRuntimeError(null);
     pause();
@@ -631,7 +800,7 @@ export default function App() {
 
   const restoreVersion = (i: number) => {
     if (abortRef.current) return;
-    const next = { ...project, current: i };
+    const next = { ...project, current: i, plan: project.versions[i]?.plan ?? project.plan };
     updateProject(project.id, () => next);
     setRuntimeError(null);
     loadPreview(next, true, 0);
@@ -655,7 +824,7 @@ export default function App() {
     setTab("preview");
   };
 
-  const switchTab = (t: "preview" | "code") => {
+  const switchTab = (t: Tab) => {
     setTab(t);
     if (t !== "preview") pause();
   };
@@ -714,9 +883,20 @@ export default function App() {
 
   // ---------- render ----------
   // A new video starts as a full-screen chat. It slides over to show the workspace once the model starts coding.
-  const focus = project.versions.length === 0 && !(generating && codingStarted);
+  // After a cut-off, the Code tab keeps showing what was written, until something newer happens. The
+  // workspace stays open for it, even on a video with no finished version yet.
+  const lastTurn = project.turns[project.turns.length - 1];
+  const cutCode = !generating && lastTurn?.role === "assistant" && lastTurn.cutoff ? splitResponse(lastTurn.cutoff.raw).code : "";
+  const focus = project.versions.length === 0 && !(generating && codingStarted) && !cutCode && !project.plan?.trim();
   const [W, H] = dims(project.settings);
-  const codeStatus = generating && liveCode
+  const builtPlan = project.versions[project.current]?.plan;
+  const planStatus = livePlan !== null ? "Writing the plan…"
+    : !project.plan?.trim() ? "No plan yet"
+    : !project.versions.length ? "Not built yet"
+    : project.plan === builtPlan ? `Plan for version ${project.current + 1}`
+    : "Edited, not built yet";
+  const codeStatus = cutCode ? `Cut off · ${cutCode.split("\n").length - 1} lines, not applied`
+    : generating && liveCode
     ? `${liveCode.split("\n").length - 1} lines`
     : currentCode ? `Version ${project.current + 1} · ${currentCode.split("\n").length - 1} lines` : "No code yet";
 
@@ -742,9 +922,9 @@ export default function App() {
             )}
           </div>
           <div className="segmented tabs" role="tablist">
-            {(["preview", "code"] as const).map((t) => (
+            {(["preview", "plan", "code"] as const).map((t) => (
               <button key={t} type="button" role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => switchTab(t)}>
-                {t === "preview" ? "Preview" : "Code"}
+                {t === "preview" ? "Preview" : t === "plan" ? "Plan" : "Code"}
               </button>
             ))}
           </div>
@@ -787,8 +967,12 @@ export default function App() {
           narrationMuted={audioPrefs.narrationMuted} sfxMuted={audioPrefs.sfxMuted}
           onToggleLaneMute={(kind) => setAudioPrefs(kind === "narration" ? { narrationMuted: !audioPrefs.narrationMuted } : { sfxMuted: !audioPrefs.sfxMuted })}
           onEditCaption={editCaption} onRevoiceCaption={revoiceCaption}
-          clipLabel={project.versions.length ? `Version ${project.current + 1}` : "Video"} />
-        <CodePane hidden={tab !== "code"} source={liveCode ?? currentCode} currentCode={currentCode} status={codeStatus}
+          clipLabel={project.versions.length ? `Version ${project.current + 1}` : "Video"} code={currentCode} />
+        <PlanPane hidden={tab !== "plan"} source={livePlan ?? project.plan ?? ""} streaming={livePlan !== null} generating={generating}
+          status={planStatus} hasVideo={project.versions.length > 0}
+          canBuild={!!project.plan?.trim() && (!project.versions.length || project.plan !== project.versions[project.current]?.plan)}
+          onChange={savePlan} onBuild={buildFromPlan} />
+        <CodePane hidden={tab !== "code"} source={liveCode ?? (cutCode || currentCode)} currentCode={currentCode} status={codeStatus}
           streaming={generating && liveCode !== null} generating={generating} onRun={runEdits} />
       </main>
 
@@ -805,12 +989,12 @@ export default function App() {
         audioAuto={audioPrefs.auto} onAudioAuto={(auto) => setAudioPrefs({ auto })}
         onAudioSettings={() => { setSettingsTab(apiKeys.keys.elevenlabs ? "voice" : "api"); setSettingsOpen(true); }}
         onAddAudio={(vi) => startAudio(project.id, vi)} onCancelAudio={cancelAudio}
-        onRemoveAudio={removeAudio} onDismissAudioError={dismissAudioError}
+        onRemoveAudio={removeAudio} onDismissAudioError={dismissAudioError} onContinue={continueTurn}
         upload={project.upload} uploadJob={uploadJob?.pid === project.id ? uploadJob : null}
-        canAttach={!project.versions.length && !generating} hasElevenKey={!!apiKeys.keys.elevenlabs}
-        onAttach={attachAudio} onRemoveUpload={removeUpload} onVoiceover={setVoiceover}
-        captionsOn={audioPrefs.captions} onCaptions={(captions) => setAudioPrefs({ captions })}
-        onAddElevenKey={() => { setSettingsTab("api"); setSettingsOpen(true); }} />
+        attachments={attachments} attachBusy={attachBusy} attachError={attachError}
+        onFiles={addFiles} onRemoveAttachment={removeAttachment} onDismissAttachError={() => setAttachError(null)}
+        onRemoveUpload={removeUpload} onVoiceover={setVoiceover}
+        captionsOn={audioPrefs.captions} onCaptions={(captions) => setAudioPrefs({ captions })} />
 
       {settingsOpen && (
         <SettingsModal user={userState.user} signedIn={userState.signedIn} theme={theme} onTheme={setTheme}

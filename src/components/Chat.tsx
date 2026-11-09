@@ -1,8 +1,13 @@
 import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { AssistantTurn, AudioJob, Effort, Settings, Turn, Upload, VersionAudio } from "../types";
+import type { AssistantTurn, Attachment, AudioJob, Effort, Settings, Turn, Upload, VersionAudio } from "../types";
 import { EFFORT_LABELS, SUGGESTIONS, fmtTime } from "../lib/constants";
 import { DEFAULT_UPLOAD_PROMPT } from "../lib/upload";
-import { IconArrowUp, IconClose, IconKey, IconPaperclip, IconSettings, IconStop, IconVolume, IconWaveform } from "./Icons";
+import { DEFAULT_ATTACH_PROMPT } from "../lib/attachments";
+import { formatAnswers } from "../lib/intent";
+import { splitResponse } from "../lib/stream";
+import { QuestionPicker } from "./QuestionPicker";
+import { AttachMenu, VideoMenu } from "./ComposerMenus";
+import { IconArrowUp, IconClose, IconFilm, IconKey, IconSettings, IconStop, IconVolume, IconWaveform } from "./Icons";
 
 interface Props {
   turns: Turn[];
@@ -32,31 +37,34 @@ interface Props {
   onCancelAudio: (version: number) => void;
   onRemoveAudio: (version: number) => void;
   onDismissAudioError: (version: number) => void;
+  /** Pick up a reply that was cut off, from where it stopped. */
+  onContinue: (turnId: string) => void;
   /** Narration the user uploaded for this new video, and the progress of reading it. */
   upload?: Upload;
   uploadJob?: { name: string; status: "decoding" | "transcribing" | "error"; error?: string } | null;
-  canAttach: boolean;
-  hasElevenKey: boolean;
-  onAttach: (file: File) => void;
+  /** Images and video waiting to be sent with the next message. */
+  attachments: Attachment[];
+  attachBusy: string | null;
+  attachError: string | null;
+  /** Any files the user picks, drops or pastes. The app decides what each one is. */
+  onFiles: (files: File[]) => void;
+  onRemoveAttachment: (id: string) => void;
+  onDismissAttachError: () => void;
   onRemoveUpload: () => void;
   onVoiceover: (on: boolean) => void;
   captionsOn: boolean;
   onCaptions: (on: boolean) => void;
-  onAddElevenKey: () => void;
 }
 
 export function Chat(props: Props) {
   const { turns, generating, settings, effort, onSend, onStop, onOpenSettings, needsKey, onAddKey, upload, uploadJob } = props;
-  const fileInput = useRef<HTMLInputElement>(null);
+  const { attachments, attachBusy, attachError } = props;
   const [dragOver, setDragOver] = useState(false);
   const newVideo = props.versionCount === 0;
   const readingUpload = newVideo && !!uploadJob && uploadJob.status !== "error";
   const uploadReady = newVideo && !!upload && !uploadJob;
   const showUpload = newVideo && (!!upload || !!uploadJob);
 
-  // Without an ElevenLabs key there's nothing to transcribe with, so ask for one instead.
-  const pickAudio = () => { if (!props.hasElevenKey) props.onAddElevenKey(); else fileInput.current?.click(); };
-  const takeFile = (file?: File) => { if (!file) return; if (!props.hasElevenKey) props.onAddElevenKey(); else props.onAttach(file); };
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -71,6 +79,10 @@ export function Chat(props: Props) {
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
 
+  // Questions from the last reply that haven't been answered yet.
+  const last = turns[turns.length - 1];
+  const asking = !generating && last?.role === "assistant" && !last.answered && last.questions?.length ? last : null;
+
   const send = (prompt: string) => {
     stick.current = true;
     onSend(prompt);
@@ -78,8 +90,8 @@ export function Chat(props: Props) {
   const submit = (e?: FormEvent) => {
     e?.preventDefault();
     if (generating) { onStop(); return; }
-    const prompt = draft.trim() || (uploadReady ? DEFAULT_UPLOAD_PROMPT : "");
-    if (!prompt || readingUpload) return;
+    const prompt = draft.trim() || (uploadReady ? DEFAULT_UPLOAD_PROMPT : attachments.length ? DEFAULT_ATTACH_PROMPT : "");
+    if (!prompt || readingUpload || attachBusy) return;
     if (needsKey) { onAddKey(); return; }
     setDraft("");
     send(prompt);
@@ -107,6 +119,16 @@ export function Chat(props: Props) {
         ) : (
           turns.map((t) => t.role === "user" ? (
             <div key={t.id} className="msg user">
+              {!!t.attachments?.length && (
+                <div className="msg-atts">
+                  {t.attachments.map((a, i) => (
+                    <span key={i} className="msg-att" title={a.name}>
+                      <img src={a.thumb} alt={a.name} />
+                      {a.kind === "video" && <span className="att-badge" aria-label="Video"><IconFilm width={10} height={10} /></span>}
+                    </span>
+                  ))}
+                </div>
+              )}
               {t.text}
             </div>
           ) : (
@@ -116,6 +138,11 @@ export function Chat(props: Props) {
       </div>
 
       <form className="composer" onSubmit={submit}>
+        {asking && (
+          <QuestionPicker key={asking.id} questions={asking.questions!}
+            onSubmit={(answers) => send(formatAnswers(asking.questions!, answers))}
+            onSkip={() => send("Skip the questions and use your best judgment.")} />
+        )}
         {needsKey && (
           <div className="key-banner" role="note">
             <IconKey width={16} height={16} />
@@ -124,9 +151,9 @@ export function Chat(props: Props) {
           </div>
         )}
         <div className={`composer-box ${dragOver ? "drop" : ""}`}
-          onDragOver={(e) => { if (props.canAttach && e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); } }}
+          onDragOver={(e) => { if (!generating && e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); } }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
-          onDrop={(e) => { setDragOver(false); if (!props.canAttach) return; e.preventDefault(); takeFile(e.dataTransfer.files[0]); }}>
+          onDrop={(e) => { setDragOver(false); if (generating) return; e.preventDefault(); props.onFiles(Array.from(e.dataTransfer.files)); }}>
           {showUpload && (
             <div className={`upload-chip ${uploadJob?.status === "error" ? "error" : ""}`}>
               <span className="upload-icon" aria-hidden="true">
@@ -154,35 +181,44 @@ export function Chat(props: Props) {
               <button type="button" className="icon-btn" onClick={props.onRemoveUpload} aria-label="Remove the audio" title="Remove the audio"><IconClose width={15} height={15} /></button>
             </div>
           )}
-          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} rows={showUpload ? 2 : 3}
-            placeholder={uploadReady ? "Describe the look you want, or just press Generate…" : "Describe your video, or ask for a change…"} aria-label="Prompt" />
+          {(attachments.length > 0 || !!attachBusy || !!attachError) && (
+            <div className="att-row">
+              {attachments.map((a) => (
+                <span key={a.id} className="att-chip" title={a.name}>
+                  <span className="att-thumb">
+                    <img src={a.thumb} alt="" />
+                    {a.kind === "video" && <span className="att-badge" aria-hidden="true"><IconFilm width={10} height={10} /></span>}
+                  </span>
+                  <span className="att-text">
+                    <span className="att-name">{a.name}</span>
+                    <span className="att-meta">{a.kind === "video" ? `Video · ${fmtTime(a.duration ?? 0)} · ${a.images.length} frames` : "Image"}</span>
+                  </span>
+                  <button type="button" className="icon-btn" onClick={() => props.onRemoveAttachment(a.id)} aria-label={`Remove ${a.name}`} title="Remove"><IconClose width={13} height={13} /></button>
+                </span>
+              ))}
+              {attachBusy && <span className="att-chip busy" role="status"><span className="spinner" /><span className="att-text"><span className="att-name">{attachBusy}</span></span></span>}
+              {attachError && (
+                <span className="att-chip error" role="alert">
+                  <span className="att-text"><span className="att-meta">{attachError}</span></span>
+                  <button type="button" className="icon-btn" onClick={props.onDismissAttachError} aria-label="Dismiss" title="Dismiss"><IconClose width={13} height={13} /></button>
+                </span>
+              )}
+            </div>
+          )}
+          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} rows={showUpload || attachments.length ? 2 : 3}
+            onPaste={(e) => { const files = Array.from(e.clipboardData.files); if (files.length && !generating) { e.preventDefault(); props.onFiles(files); } }}
+            placeholder={asking ? "Or reply in your own words…" : uploadReady ? "Describe the look you want, or just press Generate…" : attachments.length ? "Say what to do with these, or just press Generate…" : "Describe your video, or ask for a change…"} aria-label="Prompt" />
           <div className="composer-row">
-            {props.canAttach && (
-              <>
-                <input ref={fileInput} type="file" hidden accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.oga,.opus,.flac,.webm"
-                  onChange={(e) => { takeFile(e.target.files?.[0]); e.target.value = ""; }} />
-                <button type="button" className="composer-attach" onClick={pickAudio} disabled={readingUpload}
-                  title="Upload a recording of narration. The video is built around it, with captions and your voice over.">
-                  <IconPaperclip width={16} height={16} />
-                  <span>{upload ? "Replace audio" : "Audio"}</span>
-                </button>
-              </>
-            )}
+            <AttachMenu onFiles={props.onFiles} disabled={generating || readingUpload} busy={!!attachBusy} />
+            <VideoMenu settings={settings} onSettings={props.onSettings} durationLocked={!!upload}
+              audioAuto={props.audioAuto} onAudioAuto={props.onAudioAuto} onAudioSettings={props.onAudioSettings} />
             <button type="button" className="composer-gear" onClick={onOpenSettings}
               title="Model, protocol and effort settings">
               <IconSettings width={16} height={16} />
               <span>{props.modelName} · {settings.mode === "team" ? "Team" : "Solo"} · {EFFORT_LABELS[effort]}</span>
             </button>
-            <button type="button" className={`composer-audio ${props.audioAuto ? "on" : ""}`} aria-pressed={props.audioAuto}
-              onClick={() => props.onAudioAuto(!props.audioAuto)}
-              title={props.audioAuto
-                ? "Narration and sound effects will be generated with each new version. Click to turn off."
-                : "Click to also generate narration and sound effects with each new version. You can add them to any version later."}>
-              <IconVolume width={15} height={15} />
-              <span>{props.audioAuto ? "Audio on" : "Audio"}</span>
-            </button>
             <span className="spacer" />
-            <button type="submit" className={`send-btn ${generating ? "stop" : ""}`} disabled={!generating && ((!draft.trim() && !uploadReady) || readingUpload)}
+            <button type="submit" className={`send-btn ${generating ? "stop" : ""}`} disabled={!generating && ((!draft.trim() && !uploadReady && !attachments.length) || readingUpload || !!attachBusy)}
               aria-label={generating ? "Stop" : "Generate"} title={generating ? "Stop" : "Generate (Enter)"}>
               {generating ? <IconStop /> : <IconArrowUp />}
             </button>
@@ -195,7 +231,7 @@ export function Chat(props: Props) {
 }
 
 const SCENE_STATUS: Record<string, string> = { waiting: "Waiting", writing: "Writing", retrying: "Retrying", done: "Done", failed: "Failed" };
-const PHASE_LABEL: Record<string, string> = { writing: "Planning the video", coding: "Writing animation code", animating: "Haiku agents are animating" };
+const PHASE_LABEL: Record<string, string> = { planning: "Writing the plan", writing: "Planning the video", coding: "Writing animation code", animating: "Haiku agents are animating" };
 
 function AssistantMessage(props: Props & { turn: AssistantTurn }) {
   const { turn, versionCount, current, generating, modelName, onRestore } = props;
@@ -208,7 +244,7 @@ function AssistantMessage(props: Props & { turn: AssistantTurn }) {
     <div className="msg assistant">
       {turn.thinking && (
         <details className="thinking" open={thinkingNow}>
-          <summary>{thinkingNow ? "Thinking…" : "Thought process"}</summary>
+          <summary><span className={thinkingNow ? "shine" : undefined}>{thinkingNow ? "Thinking…" : "Thought process"}</span></summary>
           <div className="thinking-text">{turn.thinking}</div>
         </details>
       )}
@@ -227,9 +263,21 @@ function AssistantMessage(props: Props & { turn: AssistantTurn }) {
         </ol>
       )}
       {turn.text && <div className="body">{turn.text}</div>}
-      {turn.pending && <div className="status"><span className="dot-pulse" /><span>{label}…</span></div>}
+      {turn.pending && <div className="status"><span className="dot-pulse" /><span className="shine">{label}…</span></div>}
       {turn.note && <div className="status">{turn.note}</div>}
-      {turn.error && <div className="msg-error">{turn.error}</div>}
+      {turn.error && (() => {
+        const kept = turn.cutoff ? Math.max(0, splitResponse(turn.cutoff.raw).code.split("\n").length - 1) : 0;
+        const canContinue = !!turn.cutoff && !generating && props.turns[props.turns.length - 1]?.id === turn.id;
+        return (
+          <div className={`msg-error ${turn.cutoff ? "with-action" : ""}`}>
+            <span>{turn.error}{turn.cutoff ? ` The ${kept} lines written so far are kept in the Code tab.` : ""}</span>
+            {canContinue && (
+              <button type="button" className="btn small" onClick={() => props.onContinue(turn.id)}
+                title="Retry from where the code stopped, without starting over">Continue</button>
+            )}
+          </div>
+        );
+      })()}
       {typeof turn.version === "number" && turn.version < versionCount && (
         <div className={`version-card ${turn.version === current ? "current" : ""}`}>
           <span className="tag">Version {turn.version + 1}</span>

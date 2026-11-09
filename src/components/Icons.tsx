@@ -42,3 +42,4 @@ export const IconSkipBack = (p: P) => <Base {...p}><path d="M6 5v14" /><path d="
 export const IconSkipForward = (p: P) => <Base {...p}><path d="M18 5v14" /><path d="M5 5.5v13L14.5 12z" fill="currentColor" stroke="none" /></Base>;
 export const IconPaperclip = (p: P) => <Base {...p}><path d="M20 11.5l-7.8 7.8a4.6 4.6 0 0 1-6.5-6.5l8.3-8.3a3.1 3.1 0 0 1 4.4 4.4l-8.3 8.3a1.5 1.5 0 0 1-2.2-2.2l7.6-7.6" /></Base>;
 export const IconWaveform = (p: P) => <Base {...p}><path d="M4 10v4M8 6.5v11M12 3.5v17M16 7.5v9M20 10v4" /></Base>;
+export const IconUpload = (p: P) => <Base {...p}><path d="M12 15V4.5M7.5 9L12 4.5 16.5 9M4.5 15v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3" /></Base>;

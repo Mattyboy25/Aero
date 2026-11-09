@@ -9,6 +9,7 @@ import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput,
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { javascript } from "@codemirror/lang-javascript";
+import { markdown } from "@codemirror/lang-markdown";
 import { tags as t } from "@lezer/highlight";
 
 // Colors come from CSS variables (see styles.css), so the editor follows the light/dark theme.
@@ -21,7 +22,24 @@ const highlight = HighlightStyle.define([
   { tag: [t.definition(t.variableName), t.className, t.typeName], color: "var(--syn-definition)" },
   { tag: [t.comment, t.lineComment, t.blockComment], color: "var(--syn-comment)", fontStyle: "italic" },
   { tag: [t.operator, t.punctuation, t.bracket], color: "var(--syn-punct)" },
+  // Markdown, for the plan
+  { tag: t.heading1, fontSize: "1.45em", fontWeight: "700", color: "var(--text)" },
+  { tag: t.heading2, fontSize: "1.15em", fontWeight: "700", color: "var(--text)" },
+  { tag: [t.heading3, t.heading4], fontWeight: "700", color: "var(--text)" },
+  { tag: t.strong, fontWeight: "700" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.monospace, fontFamily: 'ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace', fontSize: "0.92em", color: "var(--syn-string)" },
+  { tag: [t.processingInstruction, t.list, t.contentSeparator], color: "var(--muted)" },
+  { tag: [t.link, t.url], color: "var(--accent)" },
 ]);
+
+// Reading text, not code: a sans-serif face, wrapped lines, room around the page.
+const proseTheme = EditorView.theme({
+  ".cm-scroller": { fontFamily: "inherit", fontSize: "13.5px", lineHeight: "1.65" },
+  ".cm-content": { padding: "20px 0 40px", maxWidth: "820px" },
+  ".cm-line": { padding: "0 26px" },
+  ".cm-activeLine": { backgroundColor: "transparent" },
+});
 
 const theme = EditorView.theme({
   "&": { height: "100%", backgroundColor: "transparent", color: "var(--text)", fontSize: "12.5px" },
@@ -53,9 +71,11 @@ interface Props {
   follow?: boolean;
   placeholder?: string;
   label?: string;
+  /** Markdown text (the plan) instead of code: wrapped lines, no gutters. Fixed when the editor is created. */
+  prose?: boolean;
 }
 
-export function CodeEditor({ value, onChange, onRun, readOnly = false, follow = false, placeholder = "", label }: Props) {
+export function CodeEditor({ value, onChange, onRun, readOnly = false, follow = false, placeholder = "", label, prose = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const editable = useRef(new Compartment());
@@ -68,15 +88,19 @@ export function CodeEditor({ value, onChange, onRun, readOnly = false, follow = 
       state: EditorState.create({
         doc: value,
         extensions: [
-          lineNumbers(), foldGutter(), highlightSpecialChars(), history(), drawSelection(), EditorState.allowMultipleSelections.of(true),
-          indentOnInput(), syntaxHighlighting(highlight), bracketMatching(), closeBrackets(), rectangularSelection(),
-          highlightActiveLine(), highlightActiveLineGutter(), highlightSelectionMatches(),
-          javascript(), placeholderExt(placeholder), theme,
+          ...(prose
+            ? [highlightSpecialChars(), history(), drawSelection(), EditorView.lineWrapping, syntaxHighlighting(highlight), markdown(), theme, proseTheme]
+            : [
+                lineNumbers(), foldGutter(), highlightSpecialChars(), history(), drawSelection(), EditorState.allowMultipleSelections.of(true),
+                indentOnInput(), syntaxHighlighting(highlight), bracketMatching(), closeBrackets(), rectangularSelection(),
+                highlightActiveLine(), highlightActiveLineGutter(), highlightSelectionMatches(), javascript(), theme,
+              ]),
+          placeholderExt(placeholder),
           EditorView.contentAttributes.of({ "aria-label": label ?? "Code" }),
           editable.current.of([EditorView.editable.of(!readOnly), EditorState.readOnly.of(readOnly)]),
           keymap.of([
             { key: "Mod-Enter", run: () => { cb.current.onRun?.(); return true; } },
-            ...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, indentWithTab,
+            ...(prose ? [] : closeBracketsKeymap), ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...(prose ? [] : [...foldKeymap, indentWithTab]),
           ]),
           EditorView.updateListener.of((u) => { if (u.docChanged) cb.current.onChange(u.state.doc.toString()); }),
         ],

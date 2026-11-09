@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { IconCheck, IconChevron } from "./Icons";
 
 interface Props<T extends string | number> {
@@ -10,14 +11,18 @@ interface Props<T extends string | number> {
   disabled?: boolean;
   /** Show the label as text to the left of the value. */
   showLabel?: boolean;
+  /** Draw the open menu on top of the page, so a scrolling or clipping parent (like a popover) can't cut it off. */
+  portal?: boolean;
 }
 
 // A custom dropdown so the open menu matches the app. The whole pill is the button, and the
 // menu opens downward, or upward when there isn't room below (like the composer at the bottom).
-export function Select<T extends string | number>({ value, onChange, options, label, title, disabled, showLabel }: Props<T>) {
+export function Select<T extends string | number>({ value, onChange, options, label, title, disabled, showLabel, portal }: Props<T>) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [up, setUp] = useState(false);
+  const [pos, setPos] = useState<CSSProperties>({});
+  const menu = useRef<HTMLUListElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const listId = useId();
@@ -29,7 +34,13 @@ export function Select<T extends string | number>({ value, onChange, options, la
     const r = root.current!.getBoundingClientRect();
     const need = options.length * 34 + 20;
     const below = window.innerHeight - r.bottom;
-    setUp(below < need && r.top > below);
+    const goUp = below < need && r.top > below;
+    setUp(goUp);
+    if (portal) {
+      setPos(goUp
+        ? { left: r.left, bottom: window.innerHeight - r.top + 6, minWidth: r.width }
+        : { left: r.left, top: r.bottom + 6, minWidth: r.width });
+    }
     setActive(selected);
     setOpen(true);
   };
@@ -41,10 +52,15 @@ export function Select<T extends string | number>({ value, onChange, options, la
 
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!root.current?.contains(t) && !menu.current?.contains(t)) setOpen(false);
+    };
+    const close = () => setOpen(false);
     document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [open]);
+    if (portal) window.addEventListener("resize", close);
+    return () => { document.removeEventListener("pointerdown", onDown); window.removeEventListener("resize", close); };
+  }, [open, portal]);
 
   useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
 
@@ -76,19 +92,22 @@ export function Select<T extends string | number>({ value, onChange, options, la
         <span className="pill-value">{options[selected]?.label}</span>
         <IconChevron className="pill-chevron" width={14} height={14} />
       </button>
-      {open && (
-        <ul id={listId} role="listbox" aria-label={label} className={`select-menu ${up ? "up" : "down"}`}
-          onMouseDown={(e) => e.preventDefault()}>
-          {options.map((o, i) => (
-            <li key={String(o.value)} role="option" aria-selected={i === selected}
-              className={`select-opt ${i === active ? "active" : ""} ${i === selected ? "selected" : ""}`}
-              onPointerEnter={() => setActive(i)} onClick={() => choose(i)}>
-              <span>{o.label}{o.hint && <span className="opt-hint">{o.hint}</span>}</span>
-              {i === selected && <IconCheck width={14} height={14} />}
-            </li>
-          ))}
-        </ul>
-      )}
+      {open && (() => {
+        const list = (
+          <ul ref={menu} id={listId} role="listbox" aria-label={label} className={`select-menu ${up ? "up" : "down"} ${portal ? "floating" : ""}`}
+            style={portal ? pos : undefined} onMouseDown={(e) => e.preventDefault()}>
+            {options.map((o, i) => (
+              <li key={String(o.value)} role="option" aria-selected={i === selected}
+                className={`select-opt ${i === active ? "active" : ""} ${i === selected ? "selected" : ""}`}
+                onPointerEnter={() => setActive(i)} onClick={() => choose(i)}>
+                <span>{o.label}{o.hint && <span className="opt-hint">{o.hint}</span>}</span>
+                {i === selected && <IconCheck width={14} height={14} />}
+              </li>
+            ))}
+          </ul>
+        );
+        return portal ? createPortal(list, document.body) : list;
+      })()}
     </div>
   );
 }

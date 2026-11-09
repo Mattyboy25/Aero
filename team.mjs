@@ -9,14 +9,15 @@ import {
 } from "./prompt.mjs";
 import { streamMessage } from "./models.mjs";
 import { narrationBlock } from "./narration.mjs";
+import { withAttachments } from "./attachments.mjs";
 
 const SCENE_MODEL = "claude-haiku-5-5";
 const MAX_SCENES = 6;
 const SCENE_ATTEMPTS = 2;
 
-export async function runTeam({ client, prompt, settings, narration, model, effort, send, signal }) {
+export async function runTeam({ client, prompt, settings, narration, attachments, plan: agreedPlan, model, effort, send, signal }) {
   send({ type: "phase", phase: "planning" });
-  const plan = await direct({ client, prompt, settings, narration, model, effort, send, signal });
+  const plan = await direct({ client, prompt, settings, narration, attachments, agreedPlan, model, effort, send, signal });
 
   send({
     type: "plan",
@@ -27,7 +28,7 @@ export async function runTeam({ client, prompt, settings, narration, model, effo
 
   const codes = await Promise.all(
     plan.scenes.map((scene, index) =>
-      writeScene({ client, prompt, settings, narration, plan, index, send, signal })
+      writeScene({ client, prompt, settings, narration, attachments, plan, index, send, signal })
     )
   );
 
@@ -36,12 +37,13 @@ export async function runTeam({ client, prompt, settings, narration, model, effo
 
 // ---------- director (the chosen model) ----------
 
-async function direct({ client, prompt, settings, narration, model, effort, send, signal }) {
+async function direct({ client, prompt, settings, narration, attachments, agreedPlan, model, effort, send, signal }) {
   const { width, height, duration, fps } = settings;
   const content = [
     `Video settings: ${width}x${height} pixels, DURATION = ${duration} seconds, ${fps} fps.`,
     animationBlock(settings.animation),
     narration ? narrationBlock(narration, duration) : "",
+    agreedPlan ? `<plan>\n${agreedPlan}\n</plan>` : "",
     `<request>\n${prompt}\n</request>`,
   ].filter(Boolean).join("\n\n");
 
@@ -53,7 +55,7 @@ async function direct({ client, prompt, settings, narration, model, effort, send
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort, format: { type: "json_schema", schema: DIRECTOR_SCHEMA } },
       system: [{ type: "text", text: DIRECTOR_PROMPT, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content }],
+      messages: [{ role: "user", content: withAttachments(content, attachments) }],
     },
     { signal }
   );
@@ -112,7 +114,7 @@ function normalizeScenes(scenes, duration) {
 
 // ---------- scene animators (Haiku, in parallel) ----------
 
-async function writeScene({ client, prompt, settings, narration, plan, index, send, signal }) {
+async function writeScene({ client, prompt, settings, narration, attachments, plan, index, send, signal }) {
   const scene = plan.scenes[index];
   let previous = null;
 
@@ -125,7 +127,7 @@ async function writeScene({ client, prompt, settings, narration, plan, index, se
           max_tokens: 32000,
           output_config: { effort: "medium" },
           system: [{ type: "text", text: SCENE_PROMPT, cache_control: { type: "ephemeral" } }],
-          messages: [{ role: "user", content: sceneMessage({ prompt, settings, narration, plan, index, previous }) }],
+          messages: [{ role: "user", content: withAttachments(sceneMessage({ prompt, settings, narration, plan, index, previous }), attachments) }],
         },
         { signal }
       );

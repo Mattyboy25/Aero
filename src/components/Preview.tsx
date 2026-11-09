@@ -26,6 +26,8 @@ interface Props {
   segments: Segment[];
   /** Name for the video's clip on the timeline when there are no scenes. */
   clipLabel: string;
+  /** The program on screen, for the thumbnails on the video track. */
+  code: string;
   audio?: VersionAudio;
   audioJob?: AudioJob;
   muted: boolean;
@@ -85,7 +87,7 @@ export function Preview(props: Props) {
         zoomApi={zoomApi} onTogglePlay={props.onTogglePlay} onScrub={props.onScrub}
         hasAudio={!!props.audio?.clips.length} muted={props.muted} onToggleMute={props.onToggleMute}
         hasCaptions={!!props.audio?.clips.some((c) => c.kind === "narration")} showCaptions={props.showCaptions} onToggleCaptions={props.onToggleCaptions} />
-      <Timeline bridge={bridge} duration={props.duration} fps={props.fps} playing={props.playing} canPlay={props.canPlay}
+      <Timeline bridge={bridge} code={props.code} width={width} height={height} duration={props.duration} fps={props.fps} playing={props.playing} canPlay={props.canPlay}
         segments={props.segments} clipLabel={props.clipLabel} zoomApi={zoomApi} onScrub={props.onScrub}
         audio={props.audio} audioJob={props.audioJob} onAddAudio={props.onAddAudio}
         onEditCaption={props.onEditCaption} onRevoiceCaption={props.onRevoiceCaption}

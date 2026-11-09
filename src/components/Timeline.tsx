@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import type { RuntimeBridge } from "../lib/runtime";
 import type { AudioClip, AudioJob, ClipKind, VersionAudio } from "../types";
 import { fmtTime } from "../lib/constants";
+import { ThumbRenderer } from "../lib/thumbs";
 import { IconEye, IconEyeOff, IconVolume, IconVolumeOff } from "./Icons";
 
 export interface Segment { start: number; end: number; title: string }
@@ -66,6 +67,10 @@ function buildTicks(contentW: number, duration: number, fps: number) {
 // ---------- component ----------
 interface Props {
   bridge: RuntimeBridge;
+  /** The program on screen, drawn small along the video track. */
+  code: string;
+  width: number;
+  height: number;
   duration: number;
   fps: number;
   playing: boolean;
@@ -87,7 +92,7 @@ interface Props {
   onToggleLaneMute: (kind: ClipKind) => void;
 }
 
-export function Timeline({ bridge, duration, fps, playing, canPlay, segments, clipLabel, zoomApi, onScrub, audio, audioJob, onAddAudio, onEditCaption, onRevoiceCaption,
+export function Timeline({ bridge, code, width, height, duration, fps, playing, canPlay, segments, clipLabel, zoomApi, onScrub, audio, audioJob, onAddAudio, onEditCaption, onRevoiceCaption,
   showCaptions, onToggleCaptions, narrationMuted, sfxMuted, onToggleLaneMute }: Props) {
   const [editing, setEditing] = useState<{ id: string; rect: DOMRect } | null>(null);
   const time = useSyncExternalStore(bridge.subscribe, bridge.getTime);
@@ -98,6 +103,17 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, cl
   const [dragging, setDragging] = useState(false);
   const { zoom, setZoom, anchor, defaultAnchor } = zoomApi;
   const contentW = viewW ? Math.max(viewW, viewW * zoom) : 0;
+
+  // A hidden copy of the video that draws the thumbnails on the video track.
+  const [thumbs, setThumbs] = useState<ThumbRenderer | null>(null);
+  useEffect(() => {
+    const r = new ThumbRenderer();
+    setThumbs(r);
+    return () => { r.destroy(); setThumbs(null); };
+  }, []);
+  useEffect(() => {
+    if (thumbs && code) thumbs.configure({ code, aspect: width / height, duration, fps });
+  }, [thumbs, code, width, height, duration, fps]);
 
   useLayoutEffect(() => {
     const el = scroller.current!;
@@ -272,8 +288,12 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, cl
 
           <div className="tl-track video">
             {clips.map((c, i) => (
-              <div key={i} className="tl-clip" title={`${c.title} · ${fmtTime(c.start)} to ${fmtTime(c.end)}`}
+              <div key={i} className={`tl-clip ${thumbs && code ? "film" : ""}`} title={`${c.title} · ${fmtTime(c.start)} to ${fmtTime(c.end)}`}
                 style={{ left: `${pct(c.start)}%`, width: `${pct(c.end) - pct(c.start)}%` }}>
+                {thumbs && code && contentW > 0 && (
+                  <Filmstrip renderer={thumbs} scroller={scroller} start={c.start} end={c.end} duration={duration} fps={fps}
+                    contentW={contentW} aspect={width / height} />
+                )}
                 <span className="clip-title">{c.title}</span>
                 <span className="clip-dur">{(c.end - c.start).toFixed(1)}s</span>
               </div>
@@ -471,3 +491,96 @@ function AudioLane({ kind, clips, job, duration, pct, onAdd, off }: {
     </div>
   );
 }
+
+// The frames of one clip, laid end to end like Premiere's filmstrip. Only the part of the clip you
+// can see (plus a little either side) is drawn, so zooming in far never needs a giant canvas.
+const Filmstrip = memo(function Filmstrip({ renderer, scroller, start, end, duration, fps, contentW, aspect }: {
+  renderer: ThumbRenderer; scroller: RefObject<HTMLDivElement | null>; start: number; end: number;
+  duration: number; fps: number; contentW: number; aspect: number;
+}) {
+  useSyncExternalStore(renderer.subscribe, renderer.getVersion); // redraw as frames arrive
+  const host = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [h, setH] = useState(46);
+  const [range, setRange] = useState({ from: 0, to: 0 });
+
+  useLayoutEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    setH(el.clientHeight || 46);
+    const ro = new ResizeObserver(() => setH(el.clientHeight || 46));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Which part of the timeline is on screen.
+  useEffect(() => {
+    const sc = scroller.current;
+    if (!sc) return;
+    let raf = 0;
+    const update = () => { raf = 0; setRange({ from: sc.scrollLeft, to: sc.scrollLeft + sc.clientWidth }); };
+    const queue = () => { if (!raf) raf = requestAnimationFrame(update); };
+    update();
+    sc.addEventListener("scroll", queue, { passive: true });
+    const ro = new ResizeObserver(queue);
+    ro.observe(sc);
+    return () => { cancelAnimationFrame(raf); sc.removeEventListener("scroll", queue); ro.disconnect(); };
+  }, [scroller, contentW]);
+
+  const clipDur = Math.max(0.001, end - start);
+  const clipPx = (clipDur / duration) * contentW;
+  const clipLeft = (start / duration) * contentW;
+  const tileW = Math.max(12, h * aspect);
+
+  // The tiles in view, and the moment each one shows (its middle).
+  const margin = tileW * 2;
+  const a = Math.max(0, range.from - clipLeft - margin);
+  const b = Math.min(clipPx, range.to - clipLeft + margin);
+  const k0 = Math.floor(a / tileW);
+  const k1 = b > a ? Math.ceil(b / tileW) : k0;
+  const last = Math.max(0, Math.round(duration * fps) - 1);
+  const frames: number[] = [];
+  for (let k = k0; k < k1; k++) {
+    const t = start + Math.min(clipDur, ((k + 0.5) * tileW / clipPx) * clipDur);
+    frames.push(Math.min(last, renderer.frameOf(t)));
+  }
+
+  // Ask for what's missing, starting from the middle of the view so the part you're looking at fills first.
+  const key = frames.join(",");
+  const epoch = renderer.epoch;
+  useEffect(() => {
+    const mid = (range.from + range.to) / 2;
+    const order = frames
+      .map((f, i) => ({ f, d: Math.abs(clipLeft + (k0 + i + 0.5) * tileW - mid) }))
+      .sort((x, y) => x.d - y.d)
+      .map((x) => x.f);
+    const id = setTimeout(() => renderer.request(order), 80);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderer, key, epoch]);
+
+  // Draw whatever is rendered. A tile still waiting borrows the nearest frame, so nothing flashes empty.
+  useLayoutEffect(() => {
+    const cv = canvas.current;
+    if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const px = (n: number) => Math.round(n * dpr);
+    cv.width = Math.max(1, px(frames.length * tileW));
+    cv.height = Math.max(1, px(h));
+    cv.style.left = `${k0 * tileW}px`;
+    cv.style.width = `${frames.length * tileW}px`;
+    cv.style.height = `${h}px`;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    frames.forEach((f, i) => {
+      const bm = renderer.nearest(f);
+      if (bm) ctx.drawImage(bm, px(i * tileW), 0, px((i + 1) * tileW) - px(i * tileW), cv.height);
+    });
+  });
+
+  return (
+    <div ref={host} className="film-strip" aria-hidden="true">
+      <canvas ref={canvas} />
+    </div>
+  );
+});

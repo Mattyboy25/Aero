@@ -29,12 +29,40 @@ export interface Scene {
   error?: string;
 }
 
-export type Phase = "thinking" | "writing" | "coding" | "animating";
+export type Phase = "thinking" | "planning" | "writing" | "coding" | "animating";
 
 export interface UserTurn {
   id: string;
   role: "user";
   text: string;
+  /** Files sent with this message, as small previews for the chat. */
+  attachments?: AttachmentMeta[];
+}
+
+/** What the chat remembers about a file the user attached to a message. */
+export interface AttachmentMeta {
+  kind: "image" | "video";
+  name: string;
+  /** A small JPEG data URL. */
+  thumb: string;
+}
+
+/** A picture, or video frames, ready to send to Claude with the next message. */
+export interface Attachment extends AttachmentMeta {
+  id: string;
+  /** Seconds, for videos. */
+  duration?: number;
+  /** The pictures themselves: one for an image, several sampled frames for a video. */
+  images: { mediaType: string; data: string }[];
+}
+
+/** A question the assistant asks before building, shown in the picker above the composer. */
+export interface Question {
+  /** Short tab label, one or two words. */
+  header: string;
+  question: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
 }
 
 export interface AssistantTurn {
@@ -48,6 +76,11 @@ export interface AssistantTurn {
   error?: string;
   version?: number;
   team?: { phase: string; scenes: Scene[] };
+  /** Code that was written before the reply was cut off or stopped, kept so it can be continued. */
+  cutoff?: { raw: string; request: string; error?: string; baseVersion: number };
+  /** Questions asked before building. `answered` is set once the user replies or skips. */
+  questions?: Question[];
+  answered?: boolean;
 }
 
 export type Turn = UserTurn | AssistantTurn;
@@ -106,6 +139,8 @@ export interface Version {
   audio?: VersionAudio;
   /** Length of this version in seconds, fixed when it was made. Older saves fall back to the project's setting. */
   duration?: number;
+  /** The plan this version was built from. */
+  plan?: string;
 }
 
 /** Progress of a narration/sound job, kept in memory only. */
@@ -127,6 +162,8 @@ export interface Project {
   current: number;
   /** A recording uploaded when the video was started. It sets the video's length and drives its animation. */
   upload?: Upload;
+  /** The plan the code is written from: written by Claude before any code, editable by the user. */
+  plan?: string;
 }
 
 export interface Overlay {
