@@ -12,7 +12,7 @@ import { narrationBlock } from "./narration.mjs";
 import { withAttachments } from "./attachments.mjs";
 
 const SCENE_MODEL = "claude-haiku-5-5";
-const MAX_SCENES = 6;
+const MAX_SCENES = 12;
 const SCENE_ATTEMPTS = 2;
 
 export async function runTeam({ client, prompt, settings, narration, attachments, plan: agreedPlan, model, effort, send, signal }) {

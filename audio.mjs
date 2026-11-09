@@ -75,7 +75,7 @@ router.post("/plan", async (req, res) => {
   const { code, prompt, title, duration, narration, sfx, model, scenes, previous } = req.body ?? {};
   if (typeof code !== "string" || !code.trim()) return res.status(400).json({ error: "There's no animation code to plan audio for." });
   if (!narration && !sfx) return res.status(400).json({ error: "Turn on narration or sound effects in Settings first." });
-  const dur = clamp(Number(duration) || 8, 1, 60);
+  const dur = clamp(Number(duration) || 8, 1, 300);
 
   const parts = [
     `Video length: ${dur} seconds.`,
@@ -84,7 +84,7 @@ router.post("/plan", async (req, res) => {
   if (title) parts.push(`Title: ${String(title).slice(0, 200)}`);
   if (prompt) parts.push(`<request>\n${String(prompt).slice(0, 4000)}\n</request>`);
   if (Array.isArray(scenes) && scenes.length) {
-    parts.push(`<scenes>\n${scenes.slice(0, 12).map((s) => `${Number(s.start).toFixed(2)}–${Number(s.end).toFixed(2)}s: ${String(s.title).slice(0, 120)}`).join("\n")}\n</scenes>`);
+    parts.push(`<scenes>\n${scenes.slice(0, 24).map((s) => `${Number(s.start).toFixed(2)}–${Number(s.end).toFixed(2)}s: ${String(s.title).slice(0, 120)}`).join("\n")}\n</scenes>`);
   }
   if (typeof previous === "string" && previous.trim()) {
     parts.push(`<previous_narration>\nThe earlier version of this video had this script. Keep its voice and reuse lines that still fit the new timing.\n${previous.slice(0, 3000)}\n</previous_narration>`);
@@ -96,7 +96,7 @@ router.post("/plan", async (req, res) => {
   try {
     const client = new Anthropic({ apiKey });
     const stream = streamMessage(client, pickModel(model), {
-      max_tokens: 8000,
+      max_tokens: 16000,
       thinking: { type: "adaptive" },
       output_config: { effort: "low", format: { type: "json_schema", schema: PLAN_SCHEMA } },
       system: [{ type: "text", text: PLAN_PROMPT, cache_control: { type: "ephemeral" } }],
@@ -114,7 +114,7 @@ router.post("/plan", async (req, res) => {
       .filter((l) => typeof l.text === "string" && l.text.trim())
       .map((l) => ({ start: clamp(Number(l.start) || 0, 0, dur - 0.3), text: l.text.trim().slice(0, 600) }))
       .sort((a, b) => a.start - b.start)
-      .slice(0, 24);
+      .slice(0, Math.max(24, Math.ceil(dur / 3)));
     const cues = (sfx ? plan.sfx : [])
       .filter((c) => typeof c.prompt === "string" && c.prompt.trim())
       .map((c) => {
@@ -127,7 +127,7 @@ router.post("/plan", async (req, res) => {
         };
       })
       .sort((a, b) => a.start - b.start)
-      .slice(0, 20);
+      .slice(0, Math.max(20, Math.ceil(dur / 6)));
     res.json({ narration: lines, sfx: cues });
   } catch (err) {
     res.status(err?.status && err.status < 600 ? err.status : 500).json({ error: describeAnthropic(err) });

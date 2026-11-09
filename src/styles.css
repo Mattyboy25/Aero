@@ -1036,3 +1036,5 @@ button:disabled { cursor: default; }
 /* ---------- Plan tab ---------- */
 .plan-pane .code-editor { background: var(--surface); }
 .plan-pane .cm-content { margin: 0 auto; }
+.plan-pane { --md-code-bg: var(--surface-2); }
+:root[data-theme="dark"] .plan-pane { --md-code-bg: rgba(255, 255, 255, .06); }

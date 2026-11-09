@@ -5,7 +5,7 @@ import { uid } from "./constants";
 // Narration the user uploads for a new video: transcribed with ElevenLabs, split into spoken
 // lines, and turned into narration clips (one per line, all playing slices of the one recording).
 
-export const MAX_UPLOAD_SECONDS = 60;
+export const MAX_UPLOAD_SECONDS = 300; // the same as the longest video
 export const MAX_UPLOAD_BYTES = 60 * 1024 * 1024;
 export const DEFAULT_UPLOAD_PROMPT = "Create an animated video for this narration.";
 

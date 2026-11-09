@@ -9,7 +9,8 @@ import { bracketMatching, foldGutter, foldKeymap, HighlightStyle, indentOnInput,
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { javascript } from "@codemirror/lang-javascript";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { markdownLook, markdownTheme } from "../lib/mdLook";
 import { tags as t } from "@lezer/highlight";
 
 // Colors come from CSS variables (see styles.css), so the editor follows the light/dark theme.
@@ -23,13 +24,12 @@ const highlight = HighlightStyle.define([
   { tag: [t.comment, t.lineComment, t.blockComment], color: "var(--syn-comment)", fontStyle: "italic" },
   { tag: [t.operator, t.punctuation, t.bracket], color: "var(--syn-punct)" },
   // Markdown, for the plan
-  { tag: t.heading1, fontSize: "1.45em", fontWeight: "700", color: "var(--text)" },
-  { tag: t.heading2, fontSize: "1.15em", fontWeight: "700", color: "var(--text)" },
-  { tag: [t.heading3, t.heading4], fontWeight: "700", color: "var(--text)" },
+  { tag: [t.heading1, t.heading2, t.heading3, t.heading4, t.heading5, t.heading6], fontWeight: "700", color: "var(--text)" },
+  { tag: t.strikethrough, textDecoration: "line-through", color: "var(--muted)" },
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
-  { tag: t.monospace, fontFamily: 'ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace', fontSize: "0.92em", color: "var(--syn-string)" },
-  { tag: [t.processingInstruction, t.list, t.contentSeparator], color: "var(--muted)" },
+  { tag: t.monospace, color: "var(--syn-string)" },
+  { tag: [t.processingInstruction, t.contentSeparator], color: "var(--muted)" },
   { tag: [t.link, t.url], color: "var(--accent)" },
 ]);
 
@@ -89,7 +89,7 @@ export function CodeEditor({ value, onChange, onRun, readOnly = false, follow = 
         doc: value,
         extensions: [
           ...(prose
-            ? [highlightSpecialChars(), history(), drawSelection(), EditorView.lineWrapping, syntaxHighlighting(highlight), markdown(), theme, proseTheme]
+            ? [markdownTheme, proseTheme, highlightSpecialChars(), history(), drawSelection(), EditorView.lineWrapping, syntaxHighlighting(highlight), markdown({ base: markdownLanguage }), markdownLook, theme]
             : [
                 lineNumbers(), foldGutter(), highlightSpecialChars(), history(), drawSelection(), EditorState.allowMultipleSelections.of(true),
                 indentOnInput(), syntaxHighlighting(highlight), bracketMatching(), closeBrackets(), rectangularSelection(),

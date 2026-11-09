@@ -118,7 +118,7 @@ Produce a plan with:
 - \`summary\`: one or two sentences for the user describing the video.
 - \`style_guide\`: precise art direction every animator follows. Give exact hex colors and what each is for, the background treatment, font stacks with sizes as multiples of \`u = Math.min(W, H) / 1000\`, layout anchors (for example "titles centered at y = H * 0.45"), and the motion language (easing, pacing, entrances, transitions, camera); if an <animation_style> is given, the style guide must restate it concretely. Be specific enough that two animators working separately produce matching frames.
 - \`shared_code\`: plain JavaScript that every scene can call: palette constants and helper functions for recurring elements (backgrounds, logos, title treatments, particle fields). Use \`const\` and \`function\` declarations only. Don't define \`draw\` or \`setup\`, and don't draw anything at the top level. Use the globals above freely. Keep it focused: roughly 20–120 lines. It must be valid JavaScript on its own.
-- \`scenes\`: 2–6 scenes in order that together cover the whole video from 0 to DURATION seconds with no gaps or overlaps. Each scene has:
+- \`scenes\`: 2–6 scenes in order (up to 12 for a video longer than a minute) that together cover the whole video from 0 to DURATION seconds with no gaps or overlaps. Each scene has:
   - \`start\` and \`end\` in seconds.
   - \`title\`: a few words.
   - \`brief\`: detailed direction for the animator: what is on screen, where, what moves, and the timing of each beat in scene-local seconds. Say what the first and last frames look like so the transitions between scenes line up, and name the shared_code helpers the animator should use.

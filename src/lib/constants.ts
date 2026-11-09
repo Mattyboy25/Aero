@@ -7,8 +7,13 @@ export const ASPECTS: Record<Aspect, [number, number]> = {
   "4:5": [1080, 1350],
 };
 
-export const DURATIONS = [5, 8, 10, 15, 20, 30];
-export const MAX_DURATIONS = [5, 8, 10, 15, 20, 30, 45, 60];
+/** The longest a video can be, in seconds (5 minutes). The server enforces the same limit. */
+export const MAX_VIDEO_SECONDS = 300;
+export const DURATIONS = [5, 8, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300];
+export const MAX_DURATIONS = [5, 8, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300];
+/** A length for menus: "30s", "1 min", "1:30", "5 min". */
+export const fmtDuration = (d: number) =>
+  d < 60 ? `${d}s` : d % 60 === 0 ? `${d / 60} min` : `${Math.floor(d / 60)}:${String(Math.round(d % 60)).padStart(2, "0")}`;
 export const FPS_OPTIONS = [24, 30, 60];
 
 export const EFFORT_LABELS: Record<Effort, string> = { low: "Fast", medium: "Balanced", high: "Best" };

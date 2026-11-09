@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantTurn, Attachment, AudioClip, AudioJob, Effort, ModelKey, Overlay, Project, Settings, Aspect } from "./types";
-import { ASPECTS, DURATIONS, FPS_OPTIONS, MAX_DURATIONS, MODEL_INFO, dims, fmtTime, titleFrom, uid } from "./lib/constants";
+import { ASPECTS, DURATIONS, FPS_OPTIONS, MAX_DURATIONS, MODEL_INFO, dims, fmtDuration, fmtTime, titleFrom, uid } from "./lib/constants";
 import { planLength } from "./lib/length";
 import { writePlan } from "./lib/plan";
 import { payload, planIntent } from "./lib/intent";
@@ -285,7 +285,7 @@ export default function App() {
       let buf: AudioBuffer;
       try { buf = await engine.decode(file); } catch { throw new Error("This browser couldn't read that audio. Try an MP3, WAV or M4A."); }
       if (buf.duration < 1) throw new Error("That recording is too short.");
-      if (buf.duration > MAX_UPLOAD_SECONDS) throw new Error(`That recording is ${fmtTime(buf.duration)} long. For now, uploads can be up to 1:00.`);
+      if (buf.duration > MAX_UPLOAD_SECONDS) throw new Error(`That recording is ${fmtTime(buf.duration)} long. Uploads can be up to ${fmtDuration(MAX_UPLOAD_SECONDS)}.`);
       const cap = projectRef.current.settings.auto ? projectRef.current.settings.maxDuration : MAX_UPLOAD_SECONDS;
       if (Math.ceil(buf.duration) > cap) throw new Error(`That recording is ${fmtTime(buf.duration)} long, past your ${cap}s max length. Raise the max in the header, or use a shorter recording.`);
       setUploadJob({ pid, name: file.name, status: "transcribing" });
@@ -446,7 +446,8 @@ export default function App() {
         schedule();
         setOverlay(p.plan ? "Claude is updating the plan…" : "Claude is planning the video…", true);
         setCodingStarted(true); // a new video's workspace slides in, so the plan can be watched
-        if (tabRef.current !== "plan") { autoTab.current = "plan"; setTab("plan"); pause(); }
+        autoTab.current = "plan";
+        if (tabRef.current !== "plan") { setTab("plan"); pause(); }
         setLivePlan("");
         plan = await writePlan({
           request, effort, model, key: anthropicKey, signal: controller.signal,
@@ -464,7 +465,14 @@ export default function App() {
       } else if (fromPlan) {
         updateProject(pid, (q) => ({ ...q, plan }));
         setCodingStarted(true);
+        // Built from the Plan tab: follow along to the code, then the preview, like a normal run.
+        if (tabRef.current === "plan") autoTab.current = "plan";
       }
+      // When the code starts arriving, move from the plan to the code, unless the user has picked a
+      // tab of their own since. The preview follows once the version is ready.
+      const showCodeTab = () => {
+        if (autoTab.current === "plan" && tabRef.current === "plan") { autoTab.current = "code"; setTab("code"); }
+      };
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json", [KEY_HEADERS.anthropic]: anthropicKey },
@@ -501,11 +509,12 @@ export default function App() {
           turn.text = summary;
           turn.phase = inCode ? "coding" : "writing";
           if (code) setLiveCode(code);
-          if (inCode) setCodingStarted(true);
+          if (inCode) { setCodingStarted(true); showCodeTab(); }
           if (inCode) setOverlay(`Writing code… ${code.split("\n").length} lines`, true);
         } else if (event.type === "editing") {
           turn.phase = "coding";
           setCodingStarted(true);
+          showCodeTab();
           setOverlay("Applying targeted edits…", true);
         } else if (event.type === "retry") {
           // The line edits didn't apply cleanly, so the model is rewriting the whole program instead.
@@ -939,12 +948,12 @@ ${request}`);
               onChange={(d) => (d === 0 ? changeSettings({ auto: true }) : changeSettings({ auto: false, duration: d }))}
               options={[
                 { value: 0, label: "Auto", hint: "up to your max" },
-                ...(DURATIONS.includes(project.settings.duration) || (project.settings.auto && !project.upload) ? DURATIONS : [...DURATIONS, project.settings.duration].sort((a, b) => a - b)).map((d) => ({ value: d, label: `${d}s` })),
+                ...(DURATIONS.includes(project.settings.duration) || (project.settings.auto && !project.upload) ? DURATIONS : [...DURATIONS, project.settings.duration].sort((a, b) => a - b)).map((d) => ({ value: d, label: fmtDuration(d) })),
               ]} />
             {project.settings.auto && !project.upload && (
               <Select<number> showLabel label="Max" value={project.settings.maxDuration} title="Auto never goes past this length."
                 onChange={(maxDuration) => changeSettings({ maxDuration })}
-                options={MAX_DURATIONS.map((d) => ({ value: d, label: `${d}s` }))} />
+                options={MAX_DURATIONS.map((d) => ({ value: d, label: fmtDuration(d) }))} />
             )}
             <Select<number> showLabel label="FPS" value={project.settings.fps} onChange={(fps) => changeSettings({ fps })}
               options={FPS_OPTIONS.map((f) => ({ value: f, label: String(f) }))} />

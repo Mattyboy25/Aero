@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { Aspect, Settings } from "../types";
-import { ASPECTS, DURATIONS, FPS_OPTIONS, MAX_DURATIONS } from "../lib/constants";
+import { ASPECTS, DURATIONS, FPS_OPTIONS, MAX_DURATIONS, fmtDuration } from "../lib/constants";
 import { ACCEPT } from "../lib/attachments";
 import { IconChevron, IconFilm, IconPaperclip, IconUpload } from "./Icons";
 import { Select } from "./Select";
@@ -124,7 +124,7 @@ export function VideoMenu({ settings, onSettings, durationLocked, audioAuto, onA
       <button ref={button} type="button" className={`composer-video ${open ? "open" : ""}`} aria-haspopup="dialog" aria-expanded={open}
         title="Video settings: ratio, duration, frame rate and audio" onClick={() => setOpen((o) => !o)}>
         <IconFilm width={15} height={15} />
-        <span>Video · {settings.aspect} · {auto ? "Auto" : `${settings.duration}s`} · {settings.fps}fps</span>
+        <span>Video · {settings.aspect} · {auto ? "Auto" : fmtDuration(settings.duration)} · {settings.fps}fps</span>
         <IconChevron width={13} height={13} className="composer-video-chevron" />
       </button>
       {open && (
@@ -143,7 +143,7 @@ export function VideoMenu({ settings, onSettings, durationLocked, audioAuto, onA
               </div>
               <Select<number> portal label="Duration" disabled={durationLocked} value={auto ? 0 : settings.duration}
                 onChange={(d) => (d === 0 ? onSettings({ auto: true }) : onSettings({ auto: false, duration: d }))}
-                options={[{ value: 0, label: "Auto" }, ...durations.map((d) => ({ value: d, label: `${d}s` }))]} />
+                options={[{ value: 0, label: "Auto" }, ...durations.map((d) => ({ value: d, label: fmtDuration(d) }))]} />
             </div>
             {auto && (
               <div className="pop-row">
@@ -153,7 +153,7 @@ export function VideoMenu({ settings, onSettings, durationLocked, audioAuto, onA
                 </div>
                 <Select<number> portal label="Max length" value={settings.maxDuration}
                   onChange={(maxDuration) => onSettings({ maxDuration })}
-                  options={MAX_DURATIONS.map((d) => ({ value: d, label: `${d}s` }))} />
+                  options={MAX_DURATIONS.map((d) => ({ value: d, label: fmtDuration(d) }))} />
               </div>
             )}
           </section>

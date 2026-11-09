@@ -14,6 +14,8 @@ import { cleanAttachments, withAttachments } from "./attachments.mjs";
 import { planMessage, streamPlan } from "./plan.mjs";
 
 const EFFORTS = new Set(["low", "medium", "high"]);
+/** The longest a video can be, in seconds (5 minutes). */
+export const MAX_VIDEO_SECONDS = 300;
 
 // API keys come from the user, in request headers, and are used only for that request.
 // They are never stored, logged, or echoed back.
@@ -54,7 +56,7 @@ app.post("/api/generate", async (req, res) => {
   const s = {
     width: clampInt(settings?.width, 320, 3840, 1920),
     height: clampInt(settings?.height, 320, 3840, 1080),
-    duration: clampInt(settings?.duration, 1, 60, 8),
+    duration: clampInt(settings?.duration, 1, MAX_VIDEO_SECONDS, 8),
     fps: clampInt(settings?.fps, 12, 60, 30),
     animation: pickAnimation(settings?.animation),
   };
@@ -227,7 +229,7 @@ app.post("/api/plan", async (req, res) => {
   const s = {
     width: clampInt(settings?.width, 320, 3840, 1920),
     height: clampInt(settings?.height, 320, 3840, 1080),
-    duration: clampInt(settings?.duration, 1, 60, 8),
+    duration: clampInt(settings?.duration, 1, MAX_VIDEO_SECONDS, 8),
     fps: clampInt(settings?.fps, 12, 60, 30),
     animation: pickAnimation(settings?.animation),
   };
@@ -295,7 +297,7 @@ app.post("/api/intent", async (req, res) => {
 });
 
 // "Auto" length: a quick request that decides how long a video should be, never past the user's maximum.
-const LENGTH_PROMPT = `You decide how long a short motion-graphics video should be, in whole seconds. Weigh how many ideas or beats the request has, how much text must be read (viewers read about 3 words a second, and need a beat to take in each title), how much needs to move on screen, and the kind of piece: a logo sting or simple loop is 4-8 seconds, a teaser or announcement 8-15, a product explainer or short story 15-30, and anything richer longer. Don't pad: a tight video beats a long one. If the request names a length ("a 20 second intro"), use it. The maximum is a hard limit; never go over it. When the message says this is an edit of an existing video, keep its current length unless the request clearly adds or removes content, or asks for it to be longer or shorter.`;
+const LENGTH_PROMPT = `You decide how long a short motion-graphics video should be, in whole seconds. Weigh how many ideas or beats the request has, how much text must be read (viewers read about 3 words a second, and need a beat to take in each title), how much needs to move on screen, and the kind of piece: a logo sting or simple loop is 4-8 seconds, a teaser or announcement 8-15, a product explainer or short story 15-45, a fuller explainer, tutorial or story 45-120, and long-form pieces with many sections longer still, up to several minutes. Don't pad: a tight video beats a long one. If the request names a length ("a 20 second intro"), use it. The maximum is a hard limit; never go over it. When the message says this is an edit of an existing video, keep its current length unless the request clearly adds or removes content, or asks for it to be longer or shorter.`;
 const LENGTH_SCHEMA = {
   type: "object", additionalProperties: false, required: ["seconds", "reason"],
   properties: { seconds: { type: "integer" }, reason: { type: "string" } },
@@ -306,8 +308,8 @@ app.post("/api/length", async (req, res) => {
   if (!apiKey) return res.status(401).json({ error: NEEDS_KEY });
   const { prompt, current, max } = req.body ?? {};
   if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Prompt is required." });
-  const maxSec = clampInt(max, 3, 60, 30);
-  const cur = Number(current) > 0 ? clampInt(current, 1, 60, 8) : null;
+  const maxSec = clampInt(max, 3, MAX_VIDEO_SECONDS, 30);
+  const cur = Number(current) > 0 ? clampInt(current, 1, MAX_VIDEO_SECONDS, 8) : null;
   const fallback = Math.min(maxSec, cur ?? 10);
   try {
     const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 20000 });
