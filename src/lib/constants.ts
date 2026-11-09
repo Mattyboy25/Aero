@@ -1,4 +1,4 @@
-import type { Accent, Aspect, Effort, Engine, ModelKey, Settings } from "../types";
+import type { Accent, Aspect, Effort, Engine, ModelKey, Settings, AnimationStyle } from "../types";
 
 export const ASPECTS: Record<Aspect, [number, number]> = {
   "16:9": [1920, 1080],
@@ -8,6 +8,7 @@ export const ASPECTS: Record<Aspect, [number, number]> = {
 };
 
 export const DURATIONS = [5, 8, 10, 15, 20, 30];
+export const MAX_DURATIONS = [5, 8, 10, 15, 20, 30, 45, 60];
 export const FPS_OPTIONS = [24, 30, 60];
 
 export const EFFORT_LABELS: Record<Effort, string> = { low: "Fast", medium: "Balanced", high: "Best" };
@@ -30,7 +31,18 @@ export const ACCENTS: { value: Accent; label: string; color: string }[] = [
   { value: "amber", label: "Amber", color: "#b45309" },
 ];
 
-export const DEFAULT_SETTINGS: Settings = { aspect: "16:9", duration: 8, fps: 30, mode: "solo" };
+export const DEFAULT_SETTINGS: Settings = { aspect: "16:9", duration: 8, fps: 30, mode: "solo", auto: false, maxDuration: 30, animation: "auto" };
+
+// Shown in Settings > Animation. The matching direction for the model lives in animation.mjs on the server.
+export const ANIMATION_STYLES: { value: AnimationStyle; label: string; desc: string }[] = [
+  { value: "auto", label: "Auto", desc: "Claude picks the motion style that suits each video." },
+  { value: "minimal", label: "Minimal", desc: "Calm fades and clean reveals with gentle easing and a locked camera." },
+  { value: "smooth", label: "Smooth", desc: "Flowing, overlapping moves with soft easing and a slow push-in." },
+  { value: "kinetic", label: "Kinetic", desc: "Fast, punchy moves on a beat: slams, punch-ins, whip pans, big type." },
+  { value: "playful", label: "Playful", desc: "Bouncy springs, squash and stretch, pop-ins and friendly shapes." },
+  { value: "cinematic", label: "Cinematic", desc: "Slow dramatic dolly moves, depth, parallax, dissolves and film look." },
+  { value: "immersive", label: "Immersive", desc: "Fly through a 3D space with depth, fog, orbits and things rushing past." },
+];
 
 export const SUGGESTIONS = [
   "A kinetic typography intro that spells out AERO in bold, staggered letters on a deep navy background",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AssistantTurn, AudioClip, AudioJob, Effort, ModelKey, Overlay, Project, Settings, Aspect } from "./types";
-import { ASPECTS, DURATIONS, FPS_OPTIONS, MODEL_INFO, dims, fmtTime, titleFrom, uid } from "./lib/constants";
+import { ASPECTS, DURATIONS, FPS_OPTIONS, MAX_DURATIONS, MODEL_INFO, dims, fmtTime, titleFrom, uid } from "./lib/constants";
+import { planLength } from "./lib/length";
 import { load, newProject, readPref, save, writePref } from "./lib/storage";
 import { readEvents, splitResponse } from "./lib/stream";
 import { RuntimeBridge } from "./lib/runtime";
@@ -229,6 +230,8 @@ export default function App() {
       try { buf = await engine.decode(file); } catch { throw new Error("This browser couldn't read that audio. Try an MP3, WAV or M4A."); }
       if (buf.duration < 1) throw new Error("That recording is too short.");
       if (buf.duration > MAX_UPLOAD_SECONDS) throw new Error(`That recording is ${fmtTime(buf.duration)} long. For now, uploads can be up to 1:00.`);
+      const cap = projectRef.current.settings.auto ? projectRef.current.settings.maxDuration : MAX_UPLOAD_SECONDS;
+      if (Math.ceil(buf.duration) > cap) throw new Error(`That recording is ${fmtTime(buf.duration)} long, past your ${cap}s max length. Raise the max in the header, or use a shorter recording.`);
       setUploadJob({ pid, name: file.name, status: "transcribing" });
       const { words, language } = await transcribe(file, key, controller.signal);
       const lines = linesFromWords(words);
@@ -315,6 +318,19 @@ export default function App() {
     let stopReason: string | null = null;
 
     try {
+      // Auto length: Claude picks how long the video is (within the max) before it is written.
+      // An uploaded recording already sets the length, so it skips this.
+      let duration = p.settings.duration;
+      if (p.settings.auto && !p.upload && !error) {
+        setOverlay("Choosing the length…", true);
+        const plan = await planLength({ prompt, current: p.versions.length ? p.settings.duration : undefined, max: p.settings.maxDuration, key: anthropicKey, signal: controller.signal });
+        if (plan) {
+          duration = plan.seconds;
+          turn.note = `${turn.note ? turn.note + " " : ""}Auto length: ${duration}s (max ${p.settings.maxDuration}s).`;
+          if (duration !== p.settings.duration) updateProject(pid, (q) => ({ ...q, settings: { ...q.settings, duration } }));
+          schedule();
+        }
+      }
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json", [KEY_HEADERS.anthropic]: anthropicKey },
@@ -326,7 +342,7 @@ export default function App() {
           effort,
           model,
           mode: useTeam ? "team" : "solo",
-          settings: { width, height, duration: p.settings.duration, fps: p.settings.fps },
+          settings: { width, height, duration, fps: p.settings.fps, animation: p.settings.animation },
         }),
         signal: controller.signal,
       });
@@ -723,10 +739,19 @@ export default function App() {
             <Select<Aspect> showLabel label="Ratio" value={project.settings.aspect} onChange={(aspect) => changeSettings({ aspect })}
               title={`${W}×${H} pixels`}
               options={(Object.keys(ASPECTS) as Aspect[]).map((a) => ({ value: a, label: a }))} />
-            <Select<number> showLabel label="Duration" value={project.settings.duration} disabled={!!project.upload}
-              title={project.upload ? "The video is as long as your uploaded narration." : undefined}
-              onChange={(duration) => changeSettings({ duration })}
-              options={(DURATIONS.includes(project.settings.duration) ? DURATIONS : [...DURATIONS, project.settings.duration].sort((a, b) => a - b)).map((d) => ({ value: d, label: `${d}s` }))} />
+            <Select<number> showLabel label="Duration" disabled={!!project.upload}
+              value={project.settings.auto && !project.upload ? 0 : project.settings.duration}
+              title={project.upload ? "The video is as long as your uploaded narration." : "Auto lets Claude pick the length from your request, up to the max you set."}
+              onChange={(d) => (d === 0 ? changeSettings({ auto: true }) : changeSettings({ auto: false, duration: d }))}
+              options={[
+                { value: 0, label: project.versions.length ? `Auto · ${project.settings.duration}s` : "Auto", hint: "up to your max" },
+                ...(DURATIONS.includes(project.settings.duration) || (project.settings.auto && !project.upload) ? DURATIONS : [...DURATIONS, project.settings.duration].sort((a, b) => a - b)).map((d) => ({ value: d, label: `${d}s` })),
+              ]} />
+            {project.settings.auto && !project.upload && (
+              <Select<number> showLabel label="Max" value={project.settings.maxDuration} title="Auto never goes past this length."
+                onChange={(maxDuration) => changeSettings({ maxDuration })}
+                options={MAX_DURATIONS.map((d) => ({ value: d, label: `${d}s` }))} />
+            )}
             <Select<number> showLabel label="FPS" value={project.settings.fps} onChange={(fps) => changeSettings({ fps })}
               options={FPS_OPTIONS.map((f) => ({ value: f, label: String(f) }))} />
             <button type="button" className="btn primary" onClick={startExport} disabled={!canPlay || generating}>
@@ -776,7 +801,8 @@ export default function App() {
       {settingsOpen && (
         <SettingsModal user={userState.user} signedIn={userState.signedIn} theme={theme} onTheme={setTheme}
           accent={accent} onAccent={setAccent} model={model} onModel={setModel}
-          mode={project.settings.mode} onMode={(mode) => changeSettings({ mode })} effort={effort} onEffort={setEffort} initialTab={settingsTab}
+          mode={project.settings.mode} onMode={(mode) => changeSettings({ mode })}
+          animation={project.settings.animation} onAnimation={(animation) => changeSettings({ animation })} effort={effort} onEffort={setEffort} initialTab={settingsTab}
           apiKeys={apiKeys} audioPrefs={audioPrefs} onAudioPrefs={setAudioPrefs}
           onClose={() => setSettingsOpen(false)} />
       )}

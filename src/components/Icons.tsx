@@ -30,6 +30,7 @@ export const IconSettings = (p: P) => <Base {...p}><circle cx="12" cy="12" r="3"
 export const IconClose = (p: P) => <Base {...p}><path d="M6 6l12 12M18 6L6 18" /></Base>;
 export const IconSelector = (p: P) => <Base {...p}><path d="M8 9.5l4-4 4 4M8 14.5l4 4 4-4" /></Base>;
 export const IconMic = (p: P) => <Base {...p}><rect x="9" y="3.5" width="6" height="11" rx="3" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M8.5 21h7" /></Base>;
+export const IconAnimation = (p: P) => <Base {...p}><path d="M5 19c0-8 4-12 7-12s7 4 7 12" /><circle cx="12" cy="7" r="2.5" /><path d="M3 19h18" /></Base>;
 export const IconVolumeOff = (p: P) => <Base {...p}><path d="M4 9.5v5h3.5l5 4v-13l-5 4z" fill="currentColor" stroke="none" /><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" /></Base>;
 export const IconVolume =(p: P) => <Base {...p}><path d="M4 9.5v5h3.5l5 4v-13l-5 4z" fill="currentColor" stroke="none" /><path d="M16 9a4.2 4.2 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11" /></Base>;
 export const IconKey = (p: P) => <Base {...p}><circle cx="8" cy="15" r="4" /><path d="M10.8 12.2L20 3M16 7l3 3M13.5 9.5l2 2" /></Base>;

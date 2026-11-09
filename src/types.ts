@@ -1,6 +1,7 @@
 export type Aspect = "16:9" | "9:16" | "1:1" | "4:5";
 export type Effort = "low" | "medium" | "high";
 export type Engine = "solo" | "team";
+export type AnimationStyle = "auto" | "minimal" | "smooth" | "kinetic" | "playful" | "cinematic" | "immersive";
 export type ModelKey = "opus" | "sonnet" | "haiku";
 export type Theme = "light" | "dark" | "system";
 export type Accent = "terracotta" | "blue" | "violet" | "green" | "rose" | "amber";
@@ -10,6 +11,11 @@ export interface Settings {
   duration: number;
   fps: number;
   mode: Engine;
+  /** Let Claude pick the length from the request, never past `maxDuration`. */
+  auto: boolean;
+  maxDuration: number;
+  /** How things animate. Sent to the model as direction for every shot. */
+  animation: AnimationStyle;
 }
 
 export type SceneStatus = "waiting" | "writing" | "retrying" | "done" | "failed";

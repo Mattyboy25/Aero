@@ -1,3 +1,4 @@
+import { animationBlock } from "./animation.mjs";
 // Team mode: the chosen Claude model (Opus by default) plans the video as a shot list, then one Claude Haiku
 // call per scene writes that scene's animation in parallel. The scenes are
 // stitched into a single program with a timeline and transitions.
@@ -39,6 +40,7 @@ async function direct({ client, prompt, settings, narration, model, effort, send
   const { width, height, duration, fps } = settings;
   const content = [
     `Video settings: ${width}x${height} pixels, DURATION = ${duration} seconds, ${fps} fps.`,
+    animationBlock(settings.animation),
     narration ? narrationBlock(narration, duration) : "",
     `<request>\n${prompt}\n</request>`,
   ].filter(Boolean).join("\n\n");
@@ -179,6 +181,7 @@ function sceneMessage({ prompt, settings, narration, plan, index, previous }) {
 
   const parts = [
     `Video settings: ${width}x${height} pixels, ${duration} seconds total, ${fps} fps.`,
+    animationBlock(settings.animation),
     `<request>\n${prompt}\n</request>`,
     `<style_guide>\n${plan.style_guide}\n</style_guide>`,
     `<shared_code>\n${plan.shared_code}\n</shared_code>`,
@@ -193,7 +196,7 @@ function sceneMessage({ prompt, settings, narration, plan, index, previous }) {
       `\n</previous_attempt>`
     );
   }
-  return parts.join("\n\n");
+  return parts.filter(Boolean).join("\n\n");
 }
 
 function describeTransition(s) {

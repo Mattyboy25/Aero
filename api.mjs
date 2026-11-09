@@ -3,8 +3,9 @@
 import express from "express";
 import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT } from "./prompt.mjs";
+import { animationBlock, pickAnimation } from "./animation.mjs";
 import { runTeam } from "./team.mjs";
-import { pickModel, streamMessage } from "./models.mjs";
+import { MODELS, pickModel, streamMessage } from "./models.mjs";
 import { applyEdits, parseEdits } from "./edits.mjs";
 import { router as audioRouter } from "./audio.mjs";
 import { cleanNarration, narrationBlock } from "./narration.mjs";
@@ -28,6 +29,8 @@ function buildUserMessage({ prompt, code, error, settings, narration }) {
   const parts = [
     `Video settings: ${width}x${height} pixels, ${duration} seconds, ${fps} fps.`,
   ];
+  const animation = animationBlock(settings.animation);
+  if (animation) parts.push(animation);
   if (narration) parts.push(narrationBlock(narration, duration));
   if (code) parts.push(`<current_code>\n${code}\n</current_code>`);
   if (error) parts.push(`<runtime_error>\n${error}\n</runtime_error>`);
@@ -49,6 +52,7 @@ app.post("/api/generate", async (req, res) => {
     height: clampInt(settings?.height, 320, 3840, 1080),
     duration: clampInt(settings?.duration, 1, 60, 8),
     fps: clampInt(settings?.fps, 12, 60, 30),
+    animation: pickAnimation(settings?.animation),
   };
 
   const narration = cleanNarration(rawNarration, s.duration);
@@ -177,6 +181,48 @@ function describeError(err) {
   if (err instanceof Anthropic.APIError) return `API error ${err.status ?? ""}: ${err.message}`;
   return err?.message || String(err);
 }
+
+// "Auto" length: a quick request that decides how long a video should be, never past the user's maximum.
+const LENGTH_PROMPT = `You decide how long a short motion-graphics video should be, in whole seconds. Weigh how many ideas or beats the request has, how much text must be read (viewers read about 3 words a second, and need a beat to take in each title), how much needs to move on screen, and the kind of piece: a logo sting or simple loop is 4-8 seconds, a teaser or announcement 8-15, a product explainer or short story 15-30, and anything richer longer. Don't pad: a tight video beats a long one. If the request names a length ("a 20 second intro"), use it. The maximum is a hard limit; never go over it. When the message says this is an edit of an existing video, keep its current length unless the request clearly adds or removes content, or asks for it to be longer or shorter.`;
+const LENGTH_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["seconds", "reason"],
+  properties: { seconds: { type: "integer" }, reason: { type: "string" } },
+};
+
+app.post("/api/length", async (req, res) => {
+  const apiKey = cleanKey(req.get(ANTHROPIC_KEY_HEADER));
+  if (!apiKey) return res.status(401).json({ error: NEEDS_KEY });
+  const { prompt, current, max } = req.body ?? {};
+  if (typeof prompt !== "string" || !prompt.trim()) return res.status(400).json({ error: "Prompt is required." });
+  const maxSec = clampInt(max, 3, 60, 30);
+  const cur = Number(current) > 0 ? clampInt(current, 1, 60, 8) : null;
+  const fallback = Math.min(maxSec, cur ?? 10);
+  try {
+    const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 20000 });
+    const message = await client.messages.create({
+      model: MODELS.haiku.id,
+      max_tokens: 400,
+      thinking: { type: "disabled" },
+      output_config: { effort: "low", format: { type: "json_schema", schema: LENGTH_SCHEMA } },
+      system: LENGTH_PROMPT,
+      messages: [{
+        role: "user",
+        content: [
+          `Maximum length: ${maxSec} seconds.`,
+          cur ? `This is an edit of an existing ${cur}-second video.` : "This is a new video.",
+          `<request>\n${prompt.slice(0, 4000)}\n</request>`,
+        ].join("\n\n"),
+      }],
+    });
+    const text = message.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    const picked = JSON.parse(text);
+    // The limit is enforced here, whatever the model says.
+    res.json({ seconds: clampInt(picked.seconds, 3, maxSec, fallback), reason: typeof picked.reason === "string" ? picked.reason.slice(0, 200) : "" });
+  } catch (err) {
+    if (err instanceof Anthropic.AuthenticationError) return res.status(401).json({ error: describeError(err) });
+    res.json({ seconds: fallback, reason: "Couldn't pick a length, so it used a default.", fallback: true });
+  }
+});
 
 // Checks a key with the provider so the Settings page can tell the user right away.
 // Replies { status: "valid" | "invalid" | "unknown", message }.

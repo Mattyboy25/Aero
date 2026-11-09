@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Accent, Effort, Engine, ModelKey, Theme } from "../types";
-import { ACCENTS, EFFORT_LABELS, MODEL_INFO, MODEL_KEYS } from "../lib/constants";
+import type { Accent, AnimationStyle, Effort, Engine, ModelKey, Theme } from "../types";
+import { ACCENTS, ANIMATION_STYLES, EFFORT_LABELS, MODEL_INFO, MODEL_KEYS } from "../lib/constants";
 import type { User } from "../lib/user";
 import { Avatar, ThemeSwitch } from "./UserMenu";
-import { IconClose, IconPause, IconPlay, IconDatabase, IconEye, IconEyeOff, IconKey, IconLock, IconMic, IconSparkle, IconSun, IconUser, IconVolume } from "./Icons";
+import { IconAnimation, IconClose, IconPause, IconPlay, IconDatabase, IconEye, IconEyeOff, IconKey, IconLock, IconMic, IconSparkle, IconSun, IconUser, IconVolume } from "./Icons";
 import { checkKey, KEY_HEADERS, maskKey, type ApiKeys, type Provider } from "../lib/keys";
 import { DEFAULT_VOICE, type AudioPrefs } from "../lib/audioPrefs";
 import { Select } from "./Select";
@@ -11,6 +11,7 @@ import { Select } from "./Select";
 const TABS = [
   { id: "account", label: "Account", Icon: IconUser },
   { id: "model", label: "Model", Icon: IconSparkle },
+  { id: "animation", label: "Animation", Icon: IconAnimation },
   { id: "api", label: "API", Icon: IconKey },
   { id: "appearance", label: "Appearance", Icon: IconSun },
   { id: "voice", label: "Voice", Icon: IconMic },
@@ -226,6 +227,8 @@ interface Props {
   onModel: (m: ModelKey) => void;
   mode: Engine;
   onMode: (m: Engine) => void;
+  animation: AnimationStyle;
+  onAnimation: (a: AnimationStyle) => void;
   effort: Effort;
   onEffort: (e: Effort) => void;
   apiKeys: ApiKeys;
@@ -235,7 +238,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function SettingsModal({ user, signedIn, theme, onTheme, accent, onAccent, model, onModel, mode, onMode, effort, onEffort, apiKeys, audioPrefs, onAudioPrefs, initialTab = "account", onClose }: Props) {
+export function SettingsModal({ user, signedIn, theme, onTheme, accent, onAccent, model, onModel, mode, onMode, animation, onAnimation, effort, onEffort, apiKeys, audioPrefs, onAudioPrefs, initialTab = "account", onClose }: Props) {
   const card = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<TabId>(initialTab);
   const active = TABS.find((t) => t.id === tab)!;
@@ -314,6 +317,19 @@ export function SettingsModal({ user, signedIn, theme, onTheme, accent, onAccent
                   <Segmented label="Effort" value={effort} options={EFFORTS.map((v) => ({ value: v, label: EFFORT_LABELS[v] }))} onChange={onEffort} />
                 </div>
                 <p className="set-foot">Used for new videos and edits. In Team mode this model plans the shots, and scenes are always animated by Haiku.</p>
+              </section>
+            )}
+            {tab === "animation" && (
+              <section className="set-section">
+                <div className="set-row set-gap">
+                  <div className="set-info">
+                    <span className="set-title">Animation style</span>
+                    <span className="set-desc">{ANIMATION_STYLES.find((a) => a.value === animation)?.desc}</span>
+                  </div>
+                  <Select<AnimationStyle> label="Animation style" value={animation} onChange={onAnimation}
+                    options={ANIMATION_STYLES.map((a) => ({ value: a.value, label: a.label }))} />
+                </div>
+                <p className="set-foot">Applies to the current video, for new versions and edits. It sets the easing, pacing, entrances, transitions and camera movement so results stay consistent. In Team mode the director and every scene animator follow the same style. Your prompt can still ask for something specific, like "one slow push-in at the end".</p>
               </section>
             )}
             {tab === "appearance" && (
