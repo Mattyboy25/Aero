@@ -141,7 +141,10 @@ button:disabled { cursor: default; }
 }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; height: 40px; padding: 0 4px 0 6px; margin-bottom: 8px; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.logo { width: 28px; height: 28px; flex: none; color: var(--text); }
+.logo {
+  width: 30px; height: 30px; flex: none; display: block; background: var(--text);
+  -webkit-mask: var(--logo) center / 118% no-repeat; mask: var(--logo) center / 118% no-repeat;
+}
 .brand-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
 
 .side-item {
