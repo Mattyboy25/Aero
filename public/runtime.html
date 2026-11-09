@@ -9,6 +9,8 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<script src="/vendor/anime.umd.min.js"></script>
+<script src="/runtime-fx.js"></script>
 <script>
 // Runs AI-generated animation code. Loaded in an iframe with sandbox="allow-scripts"
 // (opaque origin), so the code can't touch the parent page.
@@ -185,9 +187,14 @@
     c.restore();
   }
 
+  // anime.js: timelines are stepped by hand with seek(), so turn off its own animation loop.
+  if (window.anime) window.anime.engine.useDefaultMainLoop = false;
+  const FX = window.createFx ? window.createFx({ cfg: () => cfg, ease }) : {};
+
   function compile(code) {
     const helpers = { W: cfg.W, H: cfg.H, DURATION: cfg.DURATION, FPS: cfg.FPS, TAU, lerp, clamp, map, progress, ease, random, noise, hsl,
-      camera, depthBlur, layer, composite, motionBlur, vignette, grain, letterbox };
+      camera, depthBlur, layer, composite, motionBlur, vignette, grain, letterbox,
+      anime: window.anime, FX };
     const names = Object.keys(helpers);
     const factory = new Function(...names,
       code + "\n;return { setup: typeof setup === 'function' ? setup : null, draw: typeof draw === 'function' ? draw : null };");

@@ -6,14 +6,15 @@ import { readEvents, splitResponse } from "./lib/stream";
 import { RuntimeBridge } from "./lib/runtime";
 import { exportMp4, ExportCancelled } from "./lib/exportMp4";
 import type { Slosh } from "./lib/slosh";
-import { useTheme } from "./lib/useTheme";
+import { useAccent, useTheme } from "./lib/useTheme";
 import { Sidebar } from "./components/Sidebar";
 import { Chat } from "./components/Chat";
 import { Preview } from "./components/Preview";
 import { CodePane } from "./components/CodePane";
 import { ExportDialog, type ExportState } from "./components/ExportDialog";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { useUser } from "./lib/user";
+import { KEY_HEADERS, useApiKeys } from "./lib/keys";
 import { Select } from "./components/Select";
 import { IconDownload, IconSidebar } from "./components/Icons";
 
@@ -27,6 +28,7 @@ export default function App() {
   const [effort, setEffort] = useState<Effort>(initial.effort);
   const [model, setModel] = useState<ModelKey>(initial.model);
   const [theme, setTheme] = useTheme();
+  const [accent, setAccent] = useAccent();
   const [sidebarOpen, setSidebarOpen] = useState(() =>
     readPref("aero.sidebar", window.innerWidth > 1100 ? "open" : "closed") === "open");
   const [chatW, setChatW] = useState(() => {
@@ -62,7 +64,9 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [exportState, setExportState] = useState<ExportState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("account");
   const userState = useUser();
+  const apiKeys = useApiKeys();
 
   const project = projects.find((p) => p.id === activeId) ?? projects[0];
   const currentCode = codeOf(project);
@@ -171,6 +175,9 @@ export default function App() {
   // ---------- generation ----------
   async function generate({ prompt, error }: { prompt: string; error?: string }) {
     if (abortRef.current) return;
+    // Generating needs the user's own Anthropic key; send them to add one.
+    const anthropicKey = apiKeys.get("anthropic");
+    if (!anthropicKey) { setSettingsTab("api"); setSettingsOpen(true); return; }
     const p = projectRef.current;
     const pid = p.id;
     const startCode = codeOf(p);
@@ -209,7 +216,7 @@ export default function App() {
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", [KEY_HEADERS.anthropic]: anthropicKey },
         body: JSON.stringify({
           prompt: error ? "Fix the runtime error so the video plays correctly." : prompt,
           code: startCode,
@@ -237,6 +244,15 @@ export default function App() {
           turn.phase = inCode ? "coding" : "writing";
           if (code) setLiveCode(code);
           if (inCode) setOverlay(`Writing code… ${code.split("\n").length} lines`, true);
+        } else if (event.type === "editing") {
+          turn.phase = "coding";
+          setOverlay("Applying targeted edits…", true);
+        } else if (event.type === "retry") {
+          // The line edits didn't apply cleanly, so the model is rewriting the whole program instead.
+          raw = "";
+          turn.text = "";
+          turn.note = "Targeted edits didn't apply cleanly, so Claude is rewriting the full program.";
+          turn.phase = "thinking";
         } else if (event.type === "fallback") {
           // A fallback model restarts the answer, so drop the partial text.
           raw = "";
@@ -432,7 +448,7 @@ export default function App() {
       style={chatW ? ({ "--chat-w": `${chatW}px` } as React.CSSProperties) : undefined}>
       <Sidebar open={sidebarOpen} onToggle={toggleSidebar} projects={projects} activeId={project.id} busy={generating}
         onSelect={selectProject} onNew={createProject} onDelete={deleteProject} theme={theme} onTheme={setTheme}
-        userState={userState} onOpenSettings={() => setSettingsOpen(true)} />
+        userState={userState} onOpenSettings={() => { setSettingsTab("account"); setSettingsOpen(true); }} />
 
       <main className="workspace">
         <header className="workspace-head">
@@ -486,10 +502,15 @@ export default function App() {
       <Chat turns={project.turns} versionCount={project.versions.length} current={project.current} generating={generating}
         settings={project.settings} effort={effort} modelName={MODEL_INFO[model].name}
         onSend={(prompt) => generate({ prompt })} onStop={stop} onRestore={restoreVersion}
-        onSettings={changeSettings} onEffort={setEffort} />
+        onSettings={changeSettings} onEffort={setEffort}
+        needsKey={apiKeys.ready && !apiKeys.keys.anthropic} onAddKey={() => { setSettingsTab("api"); setSettingsOpen(true); }}
+        onOpenSettings={() => { setSettingsTab("model"); setSettingsOpen(true); }} />
 
       {settingsOpen && (
-        <SettingsModal user={userState.user} signedIn={userState.signedIn} theme={theme} onTheme={setTheme} model={model} onModel={setModel}
+        <SettingsModal user={userState.user} signedIn={userState.signedIn} theme={theme} onTheme={setTheme}
+          accent={accent} onAccent={setAccent} model={model} onModel={setModel}
+          mode={project.settings.mode} onMode={(mode) => changeSettings({ mode })} effort={effort} onEffort={setEffort} initialTab={settingsTab}
+          apiKeys={apiKeys}
           onClose={() => setSettingsOpen(false)} />
       )}
 

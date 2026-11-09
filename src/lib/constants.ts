@@ -1,4 +1,4 @@
-import type { Aspect, Effort, Engine, ModelKey, Settings } from "../types";
+import type { Accent, Aspect, Effort, Engine, ModelKey, Settings } from "../types";
 
 export const ASPECTS: Record<Aspect, [number, number]> = {
   "16:9": [1920, 1080],
@@ -20,6 +20,15 @@ export const MODEL_INFO: Record<ModelKey, { name: string; desc: string }> = {
   haiku: { name: "Haiku 5.5", desc: "Fastest and lowest cost. Good for simple videos and quick drafts." },
 };
 export const MODEL_KEYS = Object.keys(MODEL_INFO) as ModelKey[];
+
+export const ACCENTS: { value: Accent; label: string; color: string }[] = [
+  { value: "terracotta", label: "Terracotta", color: "#d97757" },
+  { value: "blue", label: "Blue", color: "#2563eb" },
+  { value: "violet", label: "Violet", color: "#7c3aed" },
+  { value: "green", label: "Green", color: "#16834a" },
+  { value: "rose", label: "Rose", color: "#db2777" },
+  { value: "amber", label: "Amber", color: "#b45309" },
+];
 
 export const DEFAULT_SETTINGS: Settings = { aspect: "16:9", duration: 8, fps: 30, mode: "solo" };
 

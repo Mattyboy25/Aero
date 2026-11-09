@@ -7,7 +7,30 @@ const HELPERS_DOC = `Globals you can use:
 - \`ease\`: \`linear, inQuad, outQuad, inOutQuad, inCubic, outCubic, inOutCubic, inQuart, outQuart, inOutQuart, inExpo, outExpo, inOutExpo, inSine, outSine, inOutSine, outBack, inOutBack, outElastic, outBounce\`. Each maps 0..1 to 0..1.
 - \`random(seed)\`: returns a seeded PRNG function that yields numbers in [0, 1).
 - \`noise(x, y = 0, z = 0)\`: smooth value noise in [-1, 1].
-- \`hsl(h, s, l, a = 1)\`: returns a CSS color string (h in degrees, s and l in 0..100).`;
+- \`hsl(h, s, l, a = 1)\`: returns a CSS color string (h in degrees, s and l in 0..100).
+
+Animation libraries (both are always available as globals):
+- \`anime\`: anime.js v4, for choreographing motion with real easing, springs and staggers. Animate plain JavaScript objects (never the DOM). Build the timeline once in \`setup()\`, then seek it to the current time in \`draw()\`, and read the animated values back from your objects:
+    let tl, S;
+    function setup() {
+      S = { title: 0, dots: [0, 1, 2].map(() => ({ y: 60, a: 0 })) };
+      tl = anime.createTimeline({ autoplay: false })
+        .add(S, { title: 1, duration: 1400, ease: 'outExpo' }, 300)
+        .add(S.dots, { y: 0, a: 1, duration: 800, ease: 'outBack', delay: anime.stagger(120) }, 1200);
+    }
+    function draw(ctx, t) {
+      tl.seek(t * 1000);   // milliseconds; now S.title and S.dots[i].y hold the values for time t
+      // ...draw using them
+    }
+  Rules: \`.add(target, { prop: toValue, duration, ease, delay }, startMs)\` takes ALL options in one object, and the third argument is the start time in milliseconds. The target is an object or an array of objects. Use \`[from, to]\` for an explicit starting value. Eases: 'linear', 'inQuad', 'outQuad', 'inOutQuad' (also Cubic, Quart, Expo, Sine), 'outBack', 'inOutBack', 'outElastic', 'outBounce', or \`anime.createSpring({ stiffness: 90, damping: 12 })\`. Stagger an array of objects with \`delay: anime.stagger(100)\` or \`anime.stagger(100, { from: 'center' })\`. Always pass \`autoplay: false\`. Never call play, pause or restart, never use \`loop\`, \`anime.utils.random\` or callbacks (for repeating motion, use Math.sin of t). Never create timelines inside \`draw()\`.
+- \`FX\`: ready-made effects in the style of the React Bits collection. They draw from the time you give them, so they scrub and export exactly.
+  - Backgrounds fill the whole frame, so call one first in \`draw()\`: \`FX.aurora(ctx, t, opts)\`, \`FX.plasma\`, \`FX.silk\`, \`FX.orbs\`. Options: \`{ colors: [up to 5 CSS colors], base: 'dark base color', speed: 1, intensity: 1, scale: 1, opacity: 1 }\`. aurora is soft northern-lights curtains over \`base\`; plasma is a rolling color field; silk is flowing satin folds; orbs is a drifting mesh gradient. They are cheap, so use one per scene.
+  - \`FX.dotGrid(ctx, t, { color, spacing, radius, wave, speed, x, y })\`: a rippling grid of dots, drawn over a background.
+  - \`FX.splitText(ctx, text, { x, y, font, fill, align, progress, effect, by, stagger, distance, ease })\`: reveals text one character at a time (\`by: 'word'\` for words). \`progress\` runs 0..1 (animate it with anime.js, and run it back down to exit). \`effect\` is 'rise' (default), 'drop', 'fade', 'scale', 'blur' or 'slide'. It returns the text width.
+  - \`FX.shinyText(ctx, text, { x, y, font, fill, shine, progress, width })\`: a band of light sweeping across the text as \`progress\` goes 0..1.
+  - \`FX.scrambleText(ctx, text, { x, y, font, fill, progress, chars, seed })\`: text that resolves left to right out of random characters.
+  - \`FX.count(from, to, progress, { decimals, commas, prefix, suffix })\`: returns the counting number as a string. Draw it yourself with fillText.
+  Text effects default to the center of the frame and take \`font\` as a full CSS font string, for example \`\`'700 120px system-ui, sans-serif'\`\` (scale sizes with u). Keep 'blur' text short.`;
 
 const RULES = `- Frames are rendered out of order (scrubbing, export), so drawing must depend only on the time argument and on data built in setup. Never use Math.random, Date, performance.now, or state that changes between draw calls.
 - No imports, DOM access, network requests, images, timers, or requestAnimationFrame. Draw everything with the Canvas 2D API.
@@ -19,6 +42,7 @@ const CRAFT = `Make it look like the work of a professional motion designer, not
 - Purposeful timing: stagger elements, ease every movement, hold key moments long enough to read.
 - A considered palette (usually 2–4 colors plus neutrals), strong composition, generous negative space, and clean typography with good hierarchy.
 - Depth and polish where it fits: gradients, soft glows via shadowBlur, subtle grain or vignette, motion trails computed from time.
+- Reach for the libraries: choreograph entrances, exits and staggers with anime.js timelines (springs and expo eases feel far better than raw math), and use FX for animated backgrounds and text reveals instead of flat fills.
 - If the request includes text, spell it exactly as given.`;
 
 // ---------- solo mode: one model writes the whole program ----------
@@ -47,9 +71,31 @@ ${CRAFT}
 
 ## Output format
 
-Reply with one or two short sentences describing the video, then exactly one \`\`\`javascript code block containing the complete program. Write no other code blocks and no text after the code block.
+For a new video, reply with one or two short sentences describing it, then exactly one \`\`\`javascript code block containing the complete program. Write no other code blocks and no text after the code block. (Edits to existing code may use the edit format described below.)
 
-When the user message includes <current_code>, treat the request as an edit: return the complete updated program and keep everything the user didn't ask to change. When it includes <runtime_error>, fix the cause of that error.`;
+When the user message includes <runtime_error>, fix the cause of that error.
+
+## Editing existing code
+
+When the user message includes <current_code>, the request is an edit. Keep everything the user didn't ask to change. You have two ways to answer:
+
+1. **Targeted edits (preferred for localized changes).** Reply with one or two short sentences describing the change, then exactly one \`\`\`edit code block containing one or more SEARCH/REPLACE blocks, and nothing after it:
+
+\`\`\`edit
+<<<<<<< SEARCH
+exact lines copied from the current code
+=======
+the lines that replace them
+>>>>>>> REPLACE
+\`\`\`
+
+   - SEARCH must be copied character for character from <current_code>, including indentation, and must match exactly one place. Include enough neighboring lines to make it unique, but keep it as short as you can.
+   - Blocks are applied in order, each against the result of the previous one. Use several blocks for several separate changes.
+   - To insert code, SEARCH for a nearby line and repeat it in REPLACE along with the new lines. To delete code, leave REPLACE empty.
+   - Never use "..." or comments such as "rest unchanged" inside SEARCH or REPLACE.
+2. **Full rewrite.** For sweeping changes (a new style, restructured scenes, or edits touching most of the program), reply with the usual \`\`\`javascript block containing the complete updated program.
+
+Pick whichever needs fewer lines of output. Never mix the two in one reply.`;
 
 // ---------- team mode: Opus directs, Haiku writes each scene in parallel ----------
 
@@ -71,6 +117,8 @@ Produce a plan with:
   - \`brief\`: detailed direction for the animator: what is on screen, where, what moves, and the timing of each beat in scene-local seconds. Say what the first and last frames look like so the transitions between scenes line up, and name the shared_code helpers the animator should use.
   - \`transition_in\`: how this scene enters from the previous one: "cut", "crossfade", or "fade_black". The first scene's transition_in is ignored.
   - \`transition_seconds\`: length of that transition (0 for a cut, usually 0.3–1.0).
+
+Encourage the animators to use anime.js and FX, and put the shared look in \`shared_code\` (for example a \`backdrop(ctx, t)\` function that calls the same FX background with the video's palette), so every scene matches.
 
 Give the video a clear arc: an opening, a main beat, and a resolved ending. Give each scene enough time for its beats to read, and don't split a short video into more scenes than it needs.
 
@@ -112,6 +160,8 @@ Define these functions:
 
 - \`function draw(ctx, lt)\` — required. Paints the entire frame for your scene, starting with the background. \`lt\` is scene-local time in seconds: 0 at the start of your scene, SCENE_DURATION at the end. During a transition, \`lt\` can run up to about 1 second below 0 or past SCENE_DURATION, so keep motion continuous there (clamp or keep moving) and never leave the frame empty.
 - \`function setup()\` — optional. Called once before any frame, to precompute data.
+
+With anime.js, build your timeline in \`setup()\` and seek it with \`tl.seek(Math.max(0, lt) * 1000)\`.
 
 \`SCENE_DURATION\` (seconds) is defined for you. All the director's shared code is also in scope: use its constants and helpers instead of redefining them, and don't redeclare any of its names.
 

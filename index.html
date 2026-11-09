@@ -11,6 +11,10 @@
     var pref = localStorage.getItem("aero.theme") || "system";
     var dark = pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    var accent = localStorage.getItem("aero.accent") || "terracotta";
+    if (["terracotta", "blue", "violet", "green", "rose", "amber"].includes(accent)) {
+      document.documentElement.dataset.accent = accent;
+    }
   } catch (e) {}
 </script>
 </head>

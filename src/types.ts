@@ -3,6 +3,7 @@ export type Effort = "low" | "medium" | "high";
 export type Engine = "solo" | "team";
 export type ModelKey = "opus" | "sonnet" | "haiku";
 export type Theme = "light" | "dark" | "system";
+export type Accent = "terracotta" | "blue" | "violet" | "green" | "rose" | "amber";
 
 export interface Settings {
   aspect: Aspect;

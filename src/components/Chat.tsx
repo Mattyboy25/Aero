@@ -1,8 +1,7 @@
 import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import type { AssistantTurn, Effort, Engine, Settings, Turn } from "../types";
+import type { AssistantTurn, Effort, Settings, Turn } from "../types";
 import { EFFORT_LABELS, SUGGESTIONS } from "../lib/constants";
-import { IconArrowUp, IconStop } from "./Icons";
-import { Select } from "./Select";
+import { IconArrowUp, IconKey, IconSettings, IconStop } from "./Icons";
 
 interface Props {
   turns: Turn[];
@@ -17,10 +16,14 @@ interface Props {
   onRestore: (version: number) => void;
   onSettings: (patch: Partial<Settings>) => void;
   onEffort: (e: Effort) => void;
+  onOpenSettings: () => void;
+  /** No Anthropic key yet, so nothing can be generated. */
+  needsKey: boolean;
+  onAddKey: () => void;
 }
 
 export function Chat(props: Props) {
-  const { turns, generating, settings, effort, onSend, onStop, onSettings, onEffort } = props;
+  const { turns, generating, settings, effort, onSend, onStop, onOpenSettings, needsKey, onAddKey } = props;
   const [draft, setDraft] = useState("");
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -44,6 +47,7 @@ export function Chat(props: Props) {
     if (generating) { onStop(); return; }
     const prompt = draft.trim();
     if (!prompt) return;
+    if (needsKey) { onAddKey(); return; }
     setDraft("");
     send(prompt);
   };
@@ -63,7 +67,7 @@ export function Chat(props: Props) {
             <p>Describe a video. Claude writes it as an animation in code, and you can keep refining it with follow-up messages.</p>
             <div className="suggestions">
               {SUGGESTIONS.map((s) => (
-                <button key={s} type="button" disabled={generating} onClick={() => send(s)}>{s}</button>
+                <button key={s} type="button" disabled={generating} onClick={() => (needsKey ? onAddKey() : send(s))}>{s}</button>
               ))}
             </div>
           </div>
@@ -79,16 +83,22 @@ export function Chat(props: Props) {
       </div>
 
       <form className="composer" onSubmit={submit}>
+        {needsKey && (
+          <div className="key-banner" role="note">
+            <IconKey width={16} height={16} />
+            <span>Add your Anthropic API key to start generating.</span>
+            <button type="button" className="btn small" onClick={onAddKey}>Add key</button>
+          </div>
+        )}
         <div className="composer-box">
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKey} rows={3}
             placeholder="Describe your video, or ask for a change…" aria-label="Prompt" />
           <div className="composer-row">
-            <Select<Engine> value={settings.mode} onChange={(mode) => onSettings({ mode })} label="Engine"
-              title="Solo: your chosen model writes the whole video. Team: it plans the shots and Haiku agents animate each scene in parallel. Edits always go to your chosen model. Change the model in Settings."
-              options={[{ value: "solo", label: "Solo" }, { value: "team", label: "Team" }]} />
-            <Select<Effort> value={effort} onChange={onEffort} label="Effort"
-              title="How hard Claude thinks. Higher is slower but more polished."
-              options={(Object.keys(EFFORT_LABELS) as Effort[]).map((v) => ({ value: v, label: EFFORT_LABELS[v] }))} />
+            <button type="button" className="composer-gear" onClick={onOpenSettings}
+              title="Model, protocol and effort settings">
+              <IconSettings width={16} height={16} />
+              <span>{props.modelName} · {settings.mode === "team" ? "Team" : "Solo"} · {EFFORT_LABELS[effort]}</span>
+            </button>
             <span className="spacer" />
             <button type="submit" className={`send-btn ${generating ? "stop" : ""}`} disabled={!generating && !draft.trim()}
               aria-label={generating ? "Stop" : "Generate"} title={generating ? "Stop" : "Generate (Enter)"}>

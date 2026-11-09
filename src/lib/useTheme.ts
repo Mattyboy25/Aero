@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { Theme } from "../types";
+import type { Accent, Theme } from "../types";
 import { readPref, writePref } from "./storage";
+import { ACCENTS } from "./constants";
 
 const query = () => matchMedia("(prefers-color-scheme: dark)");
 
@@ -22,4 +23,18 @@ export function useTheme() {
   }, [theme]);
 
   return [theme, setTheme] as const;
+}
+
+export function useAccent() {
+  const [accent, setAccent] = useState<Accent>(() => {
+    const saved = readPref("aero.accent", "terracotta");
+    return ACCENTS.some((option) => option.value === saved) ? saved as Accent : "terracotta";
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.accent = accent;
+    writePref("aero.accent", accent);
+  }, [accent]);
+
+  return [accent, setAccent] as const;
 }

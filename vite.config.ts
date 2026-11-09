@@ -16,9 +16,10 @@ function claudeApi(): Plugin {
 }
 
 export default defineConfig(({ mode }) => {
-  // Make .env values (ANTHROPIC_API_KEY, PORT) visible to the API code, without overriding the real environment.
+  // Make .env values (PORT, ANTHROPIC_BASE_URL) visible to the API code, without overriding the real environment.
+  // API keys are not read from here: each user enters their own in Settings.
   const env = loadEnv(mode, process.cwd(), "");
-  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "PORT"]) {
+  for (const key of ["ANTHROPIC_BASE_URL", "PORT"]) {
     if (env[key] && !process.env[key]) process.env[key] = env[key];
   }
   const port = Number(process.env.PORT) || 3000;
