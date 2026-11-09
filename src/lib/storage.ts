@@ -1,5 +1,5 @@
-import type { Effort, Project, Settings } from "../types";
-import { DEFAULT_SETTINGS, titleFrom, uid } from "./constants";
+import type { Effort, ModelKey, Project, Settings } from "../types";
+import { DEFAULT_MODEL, DEFAULT_SETTINGS, MODEL_KEYS, titleFrom, uid } from "./constants";
 
 const KEY = "aero.v2";
 const LEGACY_KEY = "aero.project.v1";
@@ -8,6 +8,7 @@ export interface Saved {
   projects: Project[];
   activeId: string;
   effort: Effort;
+  model: ModelKey;
 }
 
 export function newProject(settings: Settings = DEFAULT_SETTINGS): Project {
@@ -21,27 +22,33 @@ export function load(): Saved {
     if (saved && Array.isArray(saved.projects) && saved.projects.length) {
       const projects: Project[] = saved.projects.map(clean);
       const activeId = projects.some((p) => p.id === saved.activeId) ? saved.activeId : projects[0].id;
-      return { projects, activeId, effort: saved.effort || "medium" };
+      return { projects, activeId, effort: saved.effort || "medium", model: MODEL_KEYS.includes(saved.model) ? saved.model : DEFAULT_MODEL };
     }
     // Bring over the single project saved by the earlier version of the app.
     const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY) || "null");
     if (legacy && Array.isArray(legacy.versions)) {
-      const p = newProject({ ...DEFAULT_SETTINGS, ...(legacy.settings || {}) });
+      const p = newProject(cleanSettings(legacy.settings || {}));
       p.turns = (legacy.turns || []).filter((t: any) => !t.pending).map((t: any) => ({ thinking: "", ...t, id: uid() }));
       p.versions = legacy.versions;
       p.current = Math.min(legacy.current ?? -1, legacy.versions.length - 1);
       if (legacy.versions[0]?.prompt) p.title = titleFrom(legacy.versions[0].prompt);
-      return { projects: [p], activeId: p.id, effort: legacy.effort || "medium" };
+      return { projects: [p], activeId: p.id, effort: legacy.effort || "medium", model: DEFAULT_MODEL };
     }
   } catch { /* storage unavailable: start fresh */ }
   const p = newProject();
-  return { projects: [p], activeId: p.id, effort: "medium" };
+  return { projects: [p], activeId: p.id, effort: "medium", model: DEFAULT_MODEL };
+}
+
+// Drops settings that no longer exist (like the removed Cinematic toggle).
+function cleanSettings(s: object): Settings {
+  const { cinematic: _removed, ...rest } = s as Partial<Settings> & { cinematic?: unknown };
+  return { ...DEFAULT_SETTINGS, ...rest };
 }
 
 function clean(p: Project): Project {
   return {
     ...p,
-    settings: { ...DEFAULT_SETTINGS, ...p.settings },
+    settings: cleanSettings(p.settings),
     turns: p.turns.filter((t) => !(t.role === "assistant" && t.pending)),
     current: Math.min(p.current ?? -1, p.versions.length - 1),
   };

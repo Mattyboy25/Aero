@@ -73,6 +73,10 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, on
   };
   const onDown = (e: PointerEvent) => {
     if (!canPlay || e.button !== 0) return;
+    // Stop the browser from starting a text drag (the "forbidden" cursor) if something is selected.
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    (e.currentTarget as HTMLElement).focus({ preventScroll: true });
     e.currentTarget.setPointerCapture(e.pointerId);
     setDragging(true);
     const t = timeAt(e);
@@ -149,7 +153,7 @@ export function Timeline({ bridge, duration, fps, playing, canPlay, segments, on
 
         <div ref={track} className="track" role="slider" tabIndex={canPlay ? 0 : -1} aria-label="Timeline"
           aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Number(time.toFixed(2))} aria-valuetext={`${fmtTime(time)}, frame ${frameOf(time)}`}
-          aria-disabled={!canPlay} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
+          aria-disabled={!canPlay} onDragStart={(e) => e.preventDefault()} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
           onPointerLeave={() => { if (!dragging) setHover(null); }} onKeyDown={onKey}>
           <div className="rail">
             {segments.map((s, i) => (

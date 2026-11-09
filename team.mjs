@@ -1,21 +1,20 @@
-// Team mode: Claude Opus plans the video as a shot list, then one Claude Haiku
+// Team mode: the chosen Claude model (Opus by default) plans the video as a shot list, then one Claude Haiku
 // call per scene writes that scene's animation in parallel. The scenes are
 // stitched into a single program with a timeline and transitions.
 import {
   DIRECTOR_PROMPT,
   DIRECTOR_SCHEMA,
   SCENE_PROMPT,
-  CINEMATIC_DIRECTION,
 } from "./prompt.mjs";
+import { streamMessage } from "./models.mjs";
 
-const DIRECTOR_MODEL = "claude-opus-5-5";
 const SCENE_MODEL = "claude-haiku-5-5";
 const MAX_SCENES = 6;
 const SCENE_ATTEMPTS = 2;
 
-export async function runTeam({ client, prompt, settings, cinematic, effort, send, signal }) {
+export async function runTeam({ client, prompt, settings, model, effort, send, signal }) {
   send({ type: "phase", phase: "planning" });
-  const plan = await direct({ client, prompt, settings, cinematic, effort, send, signal });
+  const plan = await direct({ client, prompt, settings, model, effort, send, signal });
 
   send({
     type: "plan",
@@ -26,29 +25,27 @@ export async function runTeam({ client, prompt, settings, cinematic, effort, sen
 
   const codes = await Promise.all(
     plan.scenes.map((scene, index) =>
-      writeScene({ client, prompt, settings, cinematic, plan, index, send, signal })
+      writeScene({ client, prompt, settings, plan, index, send, signal })
     )
   );
 
   return { summary: plan.summary, code: assemble(plan, codes) };
 }
 
-// ---------- director (Opus) ----------
+// ---------- director (the chosen model) ----------
 
-async function direct({ client, prompt, settings, cinematic, effort, send, signal }) {
+async function direct({ client, prompt, settings, model, effort, send, signal }) {
   const { width, height, duration, fps } = settings;
   const content = [
     `Video settings: ${width}x${height} pixels, DURATION = ${duration} seconds, ${fps} fps.`,
-    cinematic ? CINEMATIC_DIRECTION : "",
     `<request>\n${prompt}\n</request>`,
   ].filter(Boolean).join("\n\n");
 
-  const stream = client.beta.messages.stream(
+  const stream = streamMessage(
+    client,
+    model,
     {
-      model: DIRECTOR_MODEL,
       max_tokens: 32000,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort, format: { type: "json_schema", schema: DIRECTOR_SCHEMA } },
       system: [{ type: "text", text: DIRECTOR_PROMPT, cache_control: { type: "ephemeral" } }],
@@ -111,7 +108,7 @@ function normalizeScenes(scenes, duration) {
 
 // ---------- scene animators (Haiku, in parallel) ----------
 
-async function writeScene({ client, prompt, settings, cinematic, plan, index, send, signal }) {
+async function writeScene({ client, prompt, settings, plan, index, send, signal }) {
   const scene = plan.scenes[index];
   let previous = null;
 
@@ -122,9 +119,9 @@ async function writeScene({ client, prompt, settings, cinematic, plan, index, se
         {
           model: SCENE_MODEL,
           max_tokens: 32000,
-          output_config: { effort: cinematic ? "high" : "medium" },
+          output_config: { effort: "medium" },
           system: [{ type: "text", text: SCENE_PROMPT, cache_control: { type: "ephemeral" } }],
-          messages: [{ role: "user", content: sceneMessage({ prompt, settings, cinematic, plan, index, previous }) }],
+          messages: [{ role: "user", content: sceneMessage({ prompt, settings, plan, index, previous }) }],
         },
         { signal }
       );
@@ -168,7 +165,7 @@ class SceneError extends Error {
   }
 }
 
-function sceneMessage({ prompt, settings, cinematic, plan, index, previous }) {
+function sceneMessage({ prompt, settings, plan, index, previous }) {
   const { width, height, duration, fps } = settings;
   const scene = plan.scenes[index];
   const next = plan.scenes[index + 1];
@@ -186,7 +183,6 @@ function sceneMessage({ prompt, settings, cinematic, plan, index, previous }) {
     `<scene_list>\n${list}\n</scene_list>`,
     `<your_scene>\nScene ${index + 1} of ${plan.scenes.length}: "${scene.title}". SCENE_DURATION = ${round(scene.end - scene.start)} seconds. Entering: ${enter}. Leaving: ${exit}.\n\n${scene.brief}\n</your_scene>`,
   ];
-  if (cinematic) parts.push(CINEMATIC_DIRECTION);
   if (previous) {
     parts.push(
       `<previous_attempt>\nYour previous attempt ${previous.reason}. Write the scene again and fix that.` +

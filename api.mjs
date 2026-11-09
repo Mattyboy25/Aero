@@ -2,10 +2,10 @@
 // handles both the app and /api/generate.
 import express from "express";
 import Anthropic from "@anthropic-ai/sdk";
-import { SYSTEM_PROMPT, CINEMATIC_DIRECTION } from "./prompt.mjs";
+import { SYSTEM_PROMPT } from "./prompt.mjs";
 import { runTeam } from "./team.mjs";
+import { pickModel, streamMessage } from "./models.mjs";
 
-const MODEL = "claude-opus-5-5";
 const EFFORTS = new Set(["low", "medium", "high"]);
 
 // Reads ANTHROPIC_API_KEY (or an `ant auth login` profile) from the environment.
@@ -14,12 +14,11 @@ const app = express();
 
 app.use(express.json({ limit: "2mb" }));
 
-function buildUserMessage({ prompt, code, error, settings, cinematic }) {
+function buildUserMessage({ prompt, code, error, settings }) {
   const { width, height, duration, fps } = settings;
   const parts = [
     `Video settings: ${width}x${height} pixels, ${duration} seconds, ${fps} fps.`,
   ];
-  if (cinematic) parts.push(CINEMATIC_DIRECTION);
   if (code) parts.push(`<current_code>\n${code}\n</current_code>`);
   if (error) parts.push(`<runtime_error>\n${error}\n</runtime_error>`);
   parts.push(`<request>\n${prompt}\n</request>`);
@@ -27,7 +26,8 @@ function buildUserMessage({ prompt, code, error, settings, cinematic }) {
 }
 
 app.post("/api/generate", async (req, res) => {
-  const { prompt, code, error, settings, effort, cinematic, mode } = req.body ?? {};
+  const { prompt, code, error, settings, effort, mode, model } = req.body ?? {};
+  const modelKey = pickModel(model);
   if (typeof prompt !== "string" || !prompt.trim()) {
     return res.status(400).json({ error: "Prompt is required." });
   }
@@ -55,9 +55,7 @@ app.post("/api/generate", async (req, res) => {
     if (!res.writableEnded) controller.abort();
   });
 
-  const isCinematic = cinematic === true;
-  // Cinematic mode needs the most planning, so it always runs at the highest effort.
-  const opusEffort = isCinematic ? "high" : EFFORTS.has(effort) ? effort : "medium";
+  const opusEffort = EFFORTS.has(effort) ? effort : "medium";
   const currentCode = typeof code === "string" ? code : "";
   const runtimeError = typeof error === "string" ? error : "";
 
@@ -68,7 +66,7 @@ app.post("/api/generate", async (req, res) => {
         client,
         prompt: prompt.trim(),
         settings: s,
-        cinematic: isCinematic,
+        model: modelKey,
         effort: opusEffort,
         send,
         signal: controller.signal,
@@ -79,13 +77,11 @@ app.post("/api/generate", async (req, res) => {
       return;
     }
 
-    const stream = client.beta.messages.stream(
+    const stream = streamMessage(
+      client,
+      modelKey,
       {
-        model: MODEL,
         max_tokens: 32000,
-        // If a safety classifier declines, retry on Anthropic's recommended fallback model.
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: opusEffort },
         system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
@@ -97,7 +93,6 @@ app.post("/api/generate", async (req, res) => {
               code: currentCode,
               error: runtimeError,
               settings: s,
-              cinematic: isCinematic,
             }),
           },
         ],

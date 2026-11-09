@@ -1,4 +1,4 @@
-import type { Aspect, Effort, Engine, Settings } from "../types";
+import type { Aspect, Effort, Engine, ModelKey, Settings } from "../types";
 
 export const ASPECTS: Record<Aspect, [number, number]> = {
   "16:9": [1920, 1080],
@@ -13,7 +13,15 @@ export const FPS_OPTIONS = [24, 30, 60];
 export const EFFORT_LABELS: Record<Effort, string> = { low: "Fast", medium: "Balanced", high: "Best" };
 export const ENGINE_LABELS: Record<Engine, string> = { solo: "Solo · Opus", team: "Team · Opus + Haiku" };
 
-export const DEFAULT_SETTINGS: Settings = { aspect: "16:9", duration: 8, fps: 30, cinematic: false, mode: "solo" };
+export const DEFAULT_MODEL: ModelKey = "opus";
+export const MODEL_INFO: Record<ModelKey, { name: string; desc: string }> = {
+  opus: { name: "Opus 5.5", desc: "Most capable. Best results for complex videos, and the slowest." },
+  sonnet: { name: "Sonnet 5.5", desc: "Balanced. Strong quality at a faster pace." },
+  haiku: { name: "Haiku 5.5", desc: "Fastest and lowest cost. Good for simple videos and quick drafts." },
+};
+export const MODEL_KEYS = Object.keys(MODEL_INFO) as ModelKey[];
+
+export const DEFAULT_SETTINGS: Settings = { aspect: "16:9", duration: 8, fps: 30, mode: "solo" };
 
 export const SUGGESTIONS = [
   "A kinetic typography intro that spells out AERO in bold, staggered letters on a deep navy background",

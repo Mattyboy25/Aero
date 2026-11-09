@@ -7,15 +7,7 @@ const HELPERS_DOC = `Globals you can use:
 - \`ease\`: \`linear, inQuad, outQuad, inOutQuad, inCubic, outCubic, inOutCubic, inQuart, outQuart, inOutQuart, inExpo, outExpo, inOutExpo, inSine, outSine, inOutSine, outBack, inOutBack, outElastic, outBounce\`. Each maps 0..1 to 0..1.
 - \`random(seed)\`: returns a seeded PRNG function that yields numbers in [0, 1).
 - \`noise(x, y = 0, z = 0)\`: smooth value noise in [-1, 1].
-- \`hsl(h, s, l, a = 1)\`: returns a CSS color string (h in degrees, s and l in 0..100).
-
-Camera and lens helpers:
-- \`camera(ctx, { x, y, zoom = 1, rotation = 0 })\`: applies a virtual camera so world point (x, y) sits at the frame center, scaled by zoom. Call it inside ctx.save()/restore() (or on a layer) before drawing world content.
-- \`layer(name)\`: returns the 2D context of a named full-frame offscreen canvas, cleared and reset. Each name is one reusable buffer per frame.
-- \`composite(ctx, layerCtx, { blur = 0, alpha = 1, mode = "source-over" })\`: draws a layer onto ctx, optionally blurred in pixels.
-- \`depthBlur(depth, focus, amount = 1)\`: blur radius in pixels for a plane at \`depth\` when the lens focuses at \`focus\` (both in your own depth units; 1 unit of distance ≈ 1% of the short side).
-- \`motionBlur(ctx, t, renderFn, { samples = 4, shutter = 0.5 })\`: renders renderFn(c, time) at several sub-frame times and averages them. renderFn must paint a full opaque frame. It costs \`samples\` full renders.
-- \`vignette(ctx, strength = 0.5)\`, \`grain(ctx, t, amount = 0.06)\`: finishing passes, drawn last in screen space.`;
+- \`hsl(h, s, l, a = 1)\`: returns a CSS color string (h in degrees, s and l in 0..100).`;
 
 const RULES = `- Frames are rendered out of order (scrubbing, export), so drawing must depend only on the time argument and on data built in setup. Never use Math.random, Date, performance.now, or state that changes between draw calls.
 - No imports, DOM access, network requests, images, timers, or requestAnimationFrame. Draw everything with the Canvas 2D API.
@@ -28,20 +20,6 @@ const CRAFT = `Make it look like the work of a professional motion designer, not
 - A considered palette (usually 2–4 colors plus neutrals), strong composition, generous negative space, and clean typography with good hierarchy.
 - Depth and polish where it fits: gradients, soft glows via shadowBlur, subtle grain or vignette, motion trails computed from time.
 - If the request includes text, spell it exactly as given.`;
-
-// Added to the user message when Cinematic mode is on. It lives outside the system
-// prompts so they stay identical across requests and keep hitting the cache.
-export const CINEMATIC_DIRECTION = `<cinematic_mode>
-Direct this video like a shot from a film. The camera should feel like it is operated by a cinematographer.
-
-- Camera: the camera is always moving with intent. Use slow push-ins toward the subject, pull-backs that reveal more of the scene, dolly or pan moves, and the occasional orbit-style rotation of a few degrees. Add a subtle handheld drift with noise(t * 0.3 ...) so it never feels mechanical. Every camera move is eased (inOutCubic, inOutSine, inOutQuart), never linear.
-- Depth: build the scene from 3–5 depth planes (far background, background, subject, foreground). Each plane moves with parallax from the camera position: nearer planes move and scale more.
-- Depth of field: draw each plane into its own layer() and composite() it with depthBlur(planeDepth, focus). Animate the focus to rack between planes at key moments, for example from the foreground to the subject as the main beat lands. Add a few large, soft, out-of-focus foreground shapes (bokeh, dust, light particles) drifting past the lens.
-- Motion blur: on fast camera moves or fast-moving elements, use motionBlur with 3–4 samples, only during the frames that need it.
-- Light and finish: use bloom-like glows, light leaks or lens flares where they fit, then finish with vignette() and a touch of grain(). Fill the whole frame: never add letterbox bars or other black bars.
-- Pacing: if there are several scenes, transition with motivated moves (a whip pan, a push through an object, a focus pull) instead of plain fades.
-- Performance: blur whole layers, never individual shapes. Use at most about 5 blurred composites per frame, and keep motion blur samples at 4 or fewer.
-</cinematic_mode>`;
 
 // ---------- solo mode: one model writes the whole program ----------
 
@@ -71,8 +49,6 @@ ${CRAFT}
 
 Reply with one or two short sentences describing the video, then exactly one \`\`\`javascript code block containing the complete program. Write no other code blocks and no text after the code block.
 
-When the user message includes <cinematic_mode>, follow its direction for camera and lens work.
-
 When the user message includes <current_code>, treat the request as an edit: return the complete updated program and keep everything the user didn't ask to change. When it includes <runtime_error>, fix the cause of that error.`;
 
 // ---------- team mode: Opus directs, Haiku writes each scene in parallel ----------
@@ -98,9 +74,7 @@ Produce a plan with:
 
 Give the video a clear arc: an opening, a main beat, and a resolved ending. Give each scene enough time for its beats to read, and don't split a short video into more scenes than it needs.
 
-${RULES}
-
-When the user message includes <cinematic_mode>, write that direction into the style guide and each scene brief.`;
+${RULES}`;
 
 export const DIRECTOR_SCHEMA = {
   type: "object",

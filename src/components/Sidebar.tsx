@@ -1,6 +1,8 @@
 import type { Project, Theme } from "../types";
+import type { UserState } from "../lib/user";
 import { Logo } from "./Logo";
-import { IconFilm, IconMonitor, IconMoon, IconPlus, IconSidebar, IconSun, IconTrash } from "./Icons";
+import { UserMenu } from "./UserMenu";
+import { IconFilm, IconPlus, IconSidebar, IconTrash } from "./Icons";
 
 interface Props {
   open: boolean;
@@ -13,13 +15,9 @@ interface Props {
   onDelete: (id: string) => void;
   theme: Theme;
   onTheme: (t: Theme) => void;
+  userState: UserState;
+  onOpenSettings: () => void;
 }
-
-const THEMES: { value: Theme; label: string; Icon: typeof IconSun }[] = [
-  { value: "light", label: "Light", Icon: IconSun },
-  { value: "dark", label: "Dark", Icon: IconMoon },
-  { value: "system", label: "System", Icon: IconMonitor },
-];
 
 function ago(ts: number) {
   const s = Math.round((Date.now() - ts) / 1000);
@@ -30,10 +28,15 @@ function ago(ts: number) {
 }
 
 export function Sidebar(props: Props) {
-  const { open, onToggle, projects, activeId, busy, onSelect, onNew, onDelete, theme, onTheme } = props;
+  const { open, onToggle, projects, activeId, busy, onSelect, onNew, onDelete, theme, onTheme, userState, onOpenSettings } = props;
   const sorted = [...projects].sort((a, b) => b.updatedAt - a.updatedAt);
-  const next = THEMES[(THEMES.findIndex((t) => t.value === theme) + 1) % THEMES.length];
-  const Current = THEMES.find((t) => t.value === theme)!.Icon;
+
+  const toggleProps = {
+    type: "button" as const, onClick: onToggle,
+    "aria-label": open ? "Collapse sidebar" : "Expand sidebar", title: open ? "Collapse sidebar" : "Expand sidebar",
+  };
+  const toggleBtn = <button {...toggleProps} className="icon-btn sidebar-toggle"><IconSidebar /></button>;
+  const toggleBtn2 = <button {...toggleProps} className="icon-btn"><IconSidebar /></button>;
 
   return (
     <>
@@ -43,10 +46,7 @@ export function Sidebar(props: Props) {
             <Logo className="logo" />
             <span className="brand-name">Aero</span>
           </div>
-          <button type="button" className="icon-btn" onClick={onToggle}
-            aria-label={open ? "Collapse sidebar" : "Expand sidebar"} title={open ? "Collapse sidebar" : "Expand sidebar"}>
-            <IconSidebar />
-          </button>
+          {toggleBtn}
         </div>
 
         <button type="button" className="side-item new" onClick={onNew} disabled={busy} title="New video">
@@ -79,22 +79,9 @@ export function Sidebar(props: Props) {
         </div>
 
         <div className="sidebar-foot">
-          {open ? (
-            <div className="segmented theme-switch" role="radiogroup" aria-label="Theme">
-              {THEMES.map(({ value, label, Icon }) => (
-                <button key={value} type="button" role="radio" aria-checked={theme === value}
-                  className={theme === value ? "on" : ""} onClick={() => onTheme(value)} title={label}>
-                  <Icon width={15} height={15} />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <button type="button" className="icon-btn" onClick={() => onTheme(next.value)}
-              aria-label={`Theme: ${theme}. Switch to ${next.label}`} title={`Theme: ${theme}`}>
-              <Current />
-            </button>
-          )}
+          <div className="foot-toggle" aria-hidden={open}><div>{toggleBtn2}</div></div>
+          <UserMenu user={userState.user} signedIn={userState.signedIn} expanded={open} theme={theme} onTheme={onTheme}
+            onOpenSettings={onOpenSettings} />
         </div>
       </aside>
       {open && <div className="scrim" onClick={onToggle} aria-hidden="true" />}

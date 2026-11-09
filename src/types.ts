@@ -1,13 +1,13 @@
 export type Aspect = "16:9" | "9:16" | "1:1" | "4:5";
 export type Effort = "low" | "medium" | "high";
 export type Engine = "solo" | "team";
+export type ModelKey = "opus" | "sonnet" | "haiku";
 export type Theme = "light" | "dark" | "system";
 
 export interface Settings {
   aspect: Aspect;
   duration: number;
   fps: number;
-  cinematic: boolean;
   mode: Engine;
 }
 
@@ -28,7 +28,6 @@ export interface UserTurn {
   id: string;
   role: "user";
   text: string;
-  cinematic?: boolean;
 }
 
 export interface AssistantTurn {

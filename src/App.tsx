@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AssistantTurn, Effort, Overlay, Project, Settings, Aspect } from "./types";
-import { ASPECTS, DURATIONS, FPS_OPTIONS, dims, titleFrom, uid } from "./lib/constants";
+import type { AssistantTurn, Effort, ModelKey, Overlay, Project, Settings, Aspect } from "./types";
+import { ASPECTS, DURATIONS, FPS_OPTIONS, MODEL_INFO, dims, titleFrom, uid } from "./lib/constants";
 import { load, newProject, readPref, save, writePref } from "./lib/storage";
 import { readEvents, splitResponse } from "./lib/stream";
 import { RuntimeBridge } from "./lib/runtime";
@@ -12,6 +12,8 @@ import { Chat } from "./components/Chat";
 import { Preview } from "./components/Preview";
 import { CodePane } from "./components/CodePane";
 import { ExportDialog, type ExportState } from "./components/ExportDialog";
+import { SettingsModal } from "./components/SettingsModal";
+import { useUser } from "./lib/user";
 import { Select } from "./components/Select";
 import { IconDownload, IconSidebar } from "./components/Icons";
 
@@ -23,15 +25,44 @@ export default function App() {
   const [projects, setProjects] = useState(initial.projects);
   const [activeId, setActiveId] = useState(initial.activeId);
   const [effort, setEffort] = useState<Effort>(initial.effort);
+  const [model, setModel] = useState<ModelKey>(initial.model);
   const [theme, setTheme] = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(() =>
     readPref("aero.sidebar", window.innerWidth > 1100 ? "open" : "closed") === "open");
+  const [chatW, setChatW] = useState(() => {
+    const n = Number(readPref("aero.chatW", ""));
+    return Number.isFinite(n) && n >= 280 ? n : 0; // 0 = use the CSS default
+  });
+  const [resizing, setResizing] = useState(false);
+  const clampChat = (w: number) => Math.round(Math.min(Math.max(w, 280), Math.min(800, window.innerWidth - 480)));
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setResizing(true);
+  };
+  const moveResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (resizing) setChatW(clampChat(window.innerWidth - e.clientX));
+  };
+  const endResize = () => {
+    setResizing(false);
+    if (chatW) writePref("aero.chatW", String(chatW));
+  };
+  const keyResize = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const cur = chatW || (e.currentTarget.nextElementSibling as HTMLElement | null)?.offsetWidth || 400;
+    const next = clampChat(cur + (e.key === "ArrowLeft" ? 24 : -24));
+    setChatW(next);
+    writePref("aero.chatW", String(next));
+  };
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [generating, setGenerating] = useState(false);
   const [liveCode, setLiveCode] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [exportState, setExportState] = useState<ExportState | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const userState = useUser();
 
   const project = projects.find((p) => p.id === activeId) ?? projects[0];
   const currentCode = codeOf(project);
@@ -57,9 +88,9 @@ export default function App() {
 
   // ---------- persistence ----------
   useEffect(() => {
-    const id = setTimeout(() => save({ projects, activeId, effort }), 250);
+    const id = setTimeout(() => save({ projects, activeId, effort, model }), 250);
     return () => clearTimeout(id);
-  }, [projects, activeId, effort]);
+  }, [projects, activeId, effort, model]);
 
   const updateProject = useCallback((id: string, fn: (p: Project) => Project) => {
     setProjects((ps) => ps.map((p) => (p.id === id ? { ...fn(p), updatedAt: Date.now() } : p)));
@@ -145,22 +176,22 @@ export default function App() {
     const startCode = codeOf(p);
     const userText = error ? "Fix the error in the current version." : prompt;
     const isFirst = p.versions.length === 0;
-    // Team mode builds new videos; edits and fixes go to Opus alone.
+    // Team mode builds new videos; edits and fixes go to the chosen model alone.
     const useTeam = p.settings.mode === "team" && !startCode && !error;
 
     const turn: AssistantTurn = { id: uid(), role: "assistant", text: "", thinking: "", pending: true, phase: "thinking" };
-    if (p.settings.mode === "team" && !useTeam) turn.note = "Edits go to Opus directly, so it can see the whole video.";
+    if (p.settings.mode === "team" && !useTeam) turn.note = `Edits go to ${MODEL_INFO[model].name} directly, so it can see the whole video.`;
     if (useTeam) turn.team = { phase: "planning", scenes: [] };
     updateProject(pid, (q) => ({
       ...q,
-      turns: [...q.turns, { id: uid(), role: "user", text: userText, cinematic: q.settings.cinematic }, { ...turn }],
+      turns: [...q.turns, { id: uid(), role: "user", text: userText }, { ...turn }],
     }));
 
     const controller = new AbortController();
     abortRef.current = controller;
     setGenerating(true);
     setLiveCode(null);
-    setOverlay(useTeam ? "Opus is planning the shots…" : isFirst ? "Claude is thinking…" : "Claude is editing…", true);
+    setOverlay(useTeam ? `${MODEL_INFO[model].name} is planning the shots…` : isFirst ? "Claude is thinking…" : "Claude is editing…", true);
 
     // Stream events arrive faster than the screen refreshes, so push the turn to React once per frame.
     let raf = 0;
@@ -183,8 +214,8 @@ export default function App() {
           prompt: error ? "Fix the runtime error so the video plays correctly." : prompt,
           code: startCode,
           error: error || "",
-          effort: p.settings.cinematic ? "high" : effort,
-          cinematic: p.settings.cinematic,
+          effort,
+          model,
           mode: useTeam ? "team" : "solo",
           settings: { width, height, duration: p.settings.duration, fps: p.settings.fps },
         }),
@@ -392,15 +423,16 @@ export default function App() {
 
   // ---------- render ----------
   const [W, H] = dims(project.settings);
-  const effectiveEffort: Effort = project.settings.cinematic ? "high" : effort;
   const codeStatus = generating && liveCode
     ? `${liveCode.split("\n").length - 1} lines`
     : currentCode ? `Version ${project.current + 1} · ${currentCode.split("\n").length - 1} lines` : "No code yet";
 
   return (
-    <div className={`app ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
+    <div className={`app ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}${resizing ? " resizing" : ""}`}
+      style={chatW ? ({ "--chat-w": `${chatW}px` } as React.CSSProperties) : undefined}>
       <Sidebar open={sidebarOpen} onToggle={toggleSidebar} projects={projects} activeId={project.id} busy={generating}
-        onSelect={selectProject} onNew={createProject} onDelete={deleteProject} theme={theme} onTheme={setTheme} />
+        onSelect={selectProject} onNew={createProject} onDelete={deleteProject} theme={theme} onTheme={setTheme}
+        userState={userState} onOpenSettings={() => setSettingsOpen(true)} />
 
       <main className="workspace">
         <header className="workspace-head">
@@ -409,7 +441,12 @@ export default function App() {
           </button>
           <div className="title-group">
             <h2 className="project-name" title={project.title}>{project.title}</h2>
-            {project.versions.length > 0 && <span className="version">Version {project.current + 1} of {project.versions.length}</span>}
+            {project.versions.length > 0 && (
+              <Select<number> label="Version" value={project.current} disabled={generating}
+                title="Switch to an earlier version"
+                onChange={(i) => { if (i !== project.current) restoreVersion(i); }}
+                options={project.versions.map((_, i) => ({ value: i, label: `Version ${i + 1}`, hint: i === project.versions.length - 1 ? "latest" : undefined })).reverse()} />
+            )}
           </div>
           <div className="segmented tabs" role="tablist">
             {(["preview", "code"] as const).map((t) => (
@@ -420,15 +457,15 @@ export default function App() {
           </div>
           <span className="spacer" />
           <div className="head-controls">
-            <Select<Aspect> label="Format" value={project.settings.aspect} onChange={(aspect) => changeSettings({ aspect })}
+            <Select<Aspect> showLabel label="Ratio" value={project.settings.aspect} onChange={(aspect) => changeSettings({ aspect })}
               title={`${W}×${H} pixels`}
               options={(Object.keys(ASPECTS) as Aspect[]).map((a) => ({ value: a, label: a }))} />
-            <Select<number> label="Length" value={project.settings.duration} onChange={(duration) => changeSettings({ duration })}
+            <Select<number> showLabel label="Duration" value={project.settings.duration} onChange={(duration) => changeSettings({ duration })}
               options={DURATIONS.map((d) => ({ value: d, label: `${d}s` }))} />
-            <Select<number> label="FPS" value={project.settings.fps} onChange={(fps) => changeSettings({ fps })}
-              options={FPS_OPTIONS.map((f) => ({ value: f, label: `${f} fps` }))} />
+            <Select<number> showLabel label="FPS" value={project.settings.fps} onChange={(fps) => changeSettings({ fps })}
+              options={FPS_OPTIONS.map((f) => ({ value: f, label: String(f) }))} />
             <button type="button" className="btn primary" onClick={startExport} disabled={!canPlay || generating}>
-              <IconDownload width={16} height={16} />Export MP4
+              <IconDownload width={15} height={15} />Export MP4
             </button>
           </div>
         </header>
@@ -443,10 +480,18 @@ export default function App() {
           streaming={generating && liveCode !== null} generating={generating} onRun={runEdits} />
       </main>
 
+      <div className="chat-resizer" role="separator" aria-orientation="vertical" aria-label="Resize chat" tabIndex={0}
+        onPointerDown={startResize} onPointerMove={moveResize} onPointerUp={endResize} onPointerCancel={endResize}
+        onKeyDown={keyResize} onDoubleClick={() => { setChatW(0); writePref("aero.chatW", ""); }} />
       <Chat turns={project.turns} versionCount={project.versions.length} current={project.current} generating={generating}
-        settings={project.settings} effort={effectiveEffort}
+        settings={project.settings} effort={effort} modelName={MODEL_INFO[model].name}
         onSend={(prompt) => generate({ prompt })} onStop={stop} onRestore={restoreVersion}
         onSettings={changeSettings} onEffort={setEffort} />
+
+      {settingsOpen && (
+        <SettingsModal user={userState.user} signedIn={userState.signedIn} theme={theme} onTheme={setTheme} model={model} onModel={setModel}
+          onClose={() => setSettingsOpen(false)} />
+      )}
 
       {exportState && (
         <ExportDialog state={exportState} onCancel={() => { exportCancelled.current = true; }} onClose={closeExport} />
