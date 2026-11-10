@@ -112,11 +112,12 @@ app.post("/api/generate", async (req, res) => {
     }
 
     const fence = "`".repeat(3);
-    // `tail` is the rest of a conversation, used to continue a reply that was cut off. Continuing is
-    // plain code writing, so it skips thinking and spends the whole budget on the code.
+    // `tail` is the rest of a conversation, used to continue a reply that was cut off. Thinking is always
+    // adaptive (the models don't allow turning it off); with a plan, or when continuing, the prompt says
+    // the planning is already done, so it stays short.
     const request = (content, tail = []) => ({
       max_tokens: 32000,
-      thinking: tail.length || plan ? { type: "disabled" } : { type: "adaptive", display: "summarized" },
+      thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: opusEffort },
       system: [{ type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: withAttachments(content, attachments) }, ...tail],
@@ -238,14 +239,15 @@ app.post("/api/plan", async (req, res) => {
   const controller = new AbortController();
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
   try {
+    const plan = typeof currentPlan === "string" ? currentPlan.slice(0, 60000) : "";
     const content = planMessage({
       request: request.trim().slice(0, 8000), settings: s, narration: cleanNarration(rawNarration, s.duration),
-      currentPlan: typeof currentPlan === "string" ? currentPlan.slice(0, 60000) : "",
+      currentPlan: plan,
       currentCode: typeof currentCode === "string" ? currentCode.slice(0, 200000) : "",
     });
     const stop = await streamPlan({
       client: new Anthropic({ apiKey }), model: pickModel(model), effort: EFFORTS.has(effort) ? effort : "medium",
-      content, attachments: cleanAttachments(rawAttachments), send, signal: controller.signal,
+      content, attachments: cleanAttachments(rawAttachments), currentPlan: plan, send, signal: controller.signal,
     });
     send({ type: "done", stop_reason: stop });
   } catch (err) {
@@ -268,8 +270,8 @@ app.post("/api/intent", async (req, res) => {
     const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 45000 });
     const reply = await client.messages.create({
       model: MODELS[pickModel(model)].id,
-      max_tokens: 2000,
-      thinking: { type: "disabled" },
+      max_tokens: 8000,
+      thinking: { type: "adaptive" },
       output_config: { effort: "low", format: { type: "json_schema", schema: INTENT_SCHEMA } },
       system: [{ type: "text", text: INTENT_PROMPT, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: withAttachments(intentMessage({ message: message.trim(), history, code: typeof code === "string" ? code : "", settings }), attachments) }],
@@ -315,8 +317,8 @@ app.post("/api/length", async (req, res) => {
     const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 20000 });
     const message = await client.messages.create({
       model: MODELS.haiku.id,
-      max_tokens: 400,
-      thinking: { type: "disabled" },
+      max_tokens: 4000,
+      thinking: { type: "adaptive" },
       output_config: { effort: "low", format: { type: "json_schema", schema: LENGTH_SCHEMA } },
       system: LENGTH_PROMPT,
       messages: [{

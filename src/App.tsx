@@ -84,6 +84,7 @@ export default function App() {
   // (but not if the user picked another tab meanwhile).
   const autoTab = useRef<Tab | null>(null);
   const [livePlan, setLivePlan] = useState<string | null>(null);
+  const [planEditing, setPlanEditing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [liveCode, setLiveCode] = useState<string | null>(null);
   // Set once the model starts writing code, which is when a new video's chat slides over to reveal the workspace.
@@ -455,10 +456,13 @@ export default function App() {
           narration: p.upload ? { lines: p.upload.lines } : undefined,
           attachments: payload(atts), currentPlan: p.plan, currentCode: startCode,
           onText: (text) => { planDraft = text; setLivePlan(text); },
+          // Targeted edits: keep showing the plan as it is until the edited one comes back.
+          onEditing: () => { setLivePlan(p.plan ?? ""); setPlanEditing(true); },
         });
         planDraft = "";
         updateProject(pid, (q) => ({ ...q, plan }));
         setLivePlan(null);
+        setPlanEditing(false);
         turn.phase = "coding";
         schedule();
         setOverlay(isFirst ? "Claude is writing the code…" : "Claude is editing…", true);
@@ -623,6 +627,7 @@ ${request}`);
       setGenerating(false);
       setLiveCode(null);
       setLivePlan(null);
+      setPlanEditing(false);
     }
   }
 
@@ -899,7 +904,7 @@ ${request}`);
   const focus = project.versions.length === 0 && !(generating && codingStarted) && !cutCode && !project.plan?.trim();
   const [W, H] = dims(project.settings);
   const builtPlan = project.versions[project.current]?.plan;
-  const planStatus = livePlan !== null ? "Writing the plan…"
+  const planStatus = livePlan !== null ? (planEditing ? "Editing the plan…" : "Writing the plan…")
     : !project.plan?.trim() ? "No plan yet"
     : !project.versions.length ? "Not built yet"
     : project.plan === builtPlan ? `Plan for version ${project.current + 1}`

@@ -28,7 +28,7 @@ const highlight = HighlightStyle.define([
   { tag: t.strikethrough, textDecoration: "line-through", color: "var(--muted)" },
   { tag: t.strong, fontWeight: "700" },
   { tag: t.emphasis, fontStyle: "italic" },
-  { tag: t.monospace, color: "var(--syn-string)" },
+  { tag: t.monospace, color: "var(--accent)" },
   { tag: [t.processingInstruction, t.contentSeparator], color: "var(--muted)" },
   { tag: [t.link, t.url], color: "var(--accent)" },
 ]);

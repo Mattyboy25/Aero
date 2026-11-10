@@ -16,6 +16,8 @@ export interface PlanRequest {
   signal: AbortSignal;
   /** Called with the whole plan so far, each time more of it arrives. */
   onText: (plan: string) => void;
+  /** Claude is making targeted edits to the current plan; the updated plan follows when they're applied. */
+  onEditing?: () => void;
 }
 
 /** Has Claude write (or update) the plan, streaming it as it goes. Resolves with the finished plan. */
@@ -33,6 +35,8 @@ export async function writePlan(r: PlanRequest): Promise<string> {
   let stop: string | null = null;
   for await (const e of readEvents(res)) {
     if (e.type === "text") { plan += e.text; r.onText(plan); }
+    else if (e.type === "editing") r.onEditing?.();
+    else if (e.type === "replace") { plan = e.text; r.onText(plan); }
     else if (e.type === "restart") { plan = ""; r.onText(plan); } // a fallback model starts the plan over
     else if (e.type === "error") throw new Error(e.message);
     else if (e.type === "done") stop = e.stop_reason;
